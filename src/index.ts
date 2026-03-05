@@ -267,12 +267,12 @@ async function runAgent(
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
-        }
-        await onOutput(output);
+      if (output.newSessionId) {
+        sessions[group.folder] = output.newSessionId;
+        setSession(group.folder, output.newSessionId);
       }
+      await onOutput(output);
+    }
     : undefined;
 
   try {
@@ -419,15 +419,21 @@ function recoverPendingMessages(): void {
   }
 }
 
-function ensureContainerSystemRunning(): void {
-  ensureContainerRuntimeRunning();
-  cleanupOrphans();
+function ensureContainerSystemRunning(): boolean {
+  const available = ensureContainerRuntimeRunning();
+  if (available) {
+    cleanupOrphans();
+  }
+  return available;
 }
 
 async function main(): Promise<void> {
-  ensureContainerSystemRunning();
+  const containerAvailable = ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
+  if (!containerAvailable) {
+    logger.warn('Running without container isolation — agent features requiring Docker will be unavailable');
+  }
   loadState();
 
   // Graceful shutdown handlers

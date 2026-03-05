@@ -22,43 +22,26 @@ export function stopContainer(name: string): string {
   return `${CONTAINER_RUNTIME_BIN} stop ${name}`;
 }
 
-/** Ensure the container runtime is running, starting it if needed. */
-export function ensureContainerRuntimeRunning(): void {
+/** Ensure the container runtime is running, starting it if needed.
+ *  Returns true if runtime is available, false otherwise.
+ *  Does NOT throw — callers should check the return value. */
+export function ensureContainerRuntimeRunning(): boolean {
   try {
     execSync(`${CONTAINER_RUNTIME_BIN} info`, {
       stdio: 'pipe',
       timeout: 10000,
     });
     logger.debug('Container runtime already running');
+    return true;
   } catch (err) {
-    logger.error({ err }, 'Failed to reach container runtime');
-    console.error(
-      '\n╔════════════════════════════════════════════════════════════════╗',
+    logger.warn({ err }, 'Container runtime not available — running without container support');
+    console.warn(
+      '\n⚠️  Container runtime (Docker) not found. Running in direct mode (no container isolation).\n',
     );
-    console.error(
-      '║  FATAL: Container runtime failed to start                      ║',
-    );
-    console.error(
-      '║                                                                ║',
-    );
-    console.error(
-      '║  Agents cannot run without a container runtime. To fix:        ║',
-    );
-    console.error(
-      '║  1. Ensure Docker is installed and running                     ║',
-    );
-    console.error(
-      '║  2. Run: docker info                                           ║',
-    );
-    console.error(
-      '║  3. Restart NanoClaw                                           ║',
-    );
-    console.error(
-      '╚════════════════════════════════════════════════════════════════╝\n',
-    );
-    throw new Error('Container runtime is required but failed to start');
+    return false;
   }
 }
+
 
 /** Kill orphaned NanoClaw containers from previous runs. */
 export function cleanupOrphans(): void {
