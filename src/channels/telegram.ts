@@ -13,6 +13,8 @@ export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  /** Called when a private chat needs auto-registration */
+  onAutoRegister?: (chatJid: string, chatName: string) => void;
 }
 
 export class TelegramChannel implements Channel {
@@ -47,7 +49,45 @@ export class TelegramChannel implements Channel {
 
     // Command to check bot status
     this.bot.command('ping', (ctx) => {
-      ctx.reply(`${ASSISTANT_NAME} is online.`);
+      ctx.reply(`${ASSISTANT_NAME} is online. 🌿\nAI Twins: Max (@healingmotions) & Melini (@meliniseri)`);
+    });
+
+    // /start command — welcome message
+    this.bot.command('start', (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const chatName = ctx.from?.first_name || 'friend';
+
+      // Auto-register private chats on /start
+      if (ctx.chat.type === 'private') {
+        const groups = this.opts.registeredGroups();
+        if (!groups[chatJid] && this.opts.onAutoRegister) {
+          this.opts.onAutoRegister(chatJid, chatName);
+        }
+      }
+
+      ctx.reply(
+        `🌿 *Welcome to Good Vybes!*\n\n` +
+        `I'm your AI-powered wellness guide. Chat with two amazing AI Twins:\n\n` +
+        `🧘‍♂️ *Max Lowenstein* (@healingmotions)\n` +
+        `  Breathwork • Yoga • Nutrition\n\n` +
+        `🧘‍♀️ *Melini Jesudason* (@meliniseri)\n` +
+        `  Ashtanga • Inversions • Energy Healing\n\n` +
+        `Just send a message to start chatting! 💨`,
+        { parse_mode: 'Markdown' },
+      );
+    });
+
+    // /help command
+    this.bot.command('help', (ctx) => {
+      ctx.reply(
+        `🌿 *Good Vybes Commands*\n\n` +
+        `/start — Welcome & intro\n` +
+        `/chatid — Get your chat ID\n` +
+        `/ping — Check bot status\n` +
+        `/help — This menu\n\n` +
+        `Or just type your question! 💬`,
+        { parse_mode: 'Markdown' },
+      );
     });
 
     this.bot.on('message:text', async (ctx) => {
@@ -71,9 +111,7 @@ export class TelegramChannel implements Channel {
           ? senderName
           : (ctx.chat as any).title || chatJid;
 
-      // Translate Telegram @bot_username mentions into TRIGGER_PATTERN format.
-      // Telegram @mentions (e.g., @andy_ai_bot) won't match TRIGGER_PATTERN
-      // (e.g., ^@Andy\b), so we prepend the trigger when the bot is @mentioned.
+      // Translate Telegram @bot_username mentions into TRIGGER_PATTERN format
       const botUsername = ctx.me?.username?.toLowerCase();
       if (botUsername) {
         const entities = ctx.message.entities || [];
@@ -95,13 +133,25 @@ export class TelegramChannel implements Channel {
       const isGroup = ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
       this.opts.onChatMetadata(chatJid, timestamp, chatName, 'telegram', isGroup);
 
-      // Only deliver full message for registered groups
+      // Auto-register private chats that aren't registered yet
+      const groups = this.opts.registeredGroups();
+      if (!groups[chatJid] && ctx.chat.type === 'private') {
+        if (this.opts.onAutoRegister) {
+          this.opts.onAutoRegister(chatJid, chatName);
+          logger.info({ chatJid, chatName }, 'Auto-registered private Telegram chat');
+        } else {
+          logger.debug(
+            { chatJid, chatName },
+            'Message from unregistered Telegram chat (no auto-register)',
+          );
+          return;
+        }
+      }
+
+      // Check registration again after potential auto-register
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) {
-        logger.debug(
-          { chatJid, chatName },
-          'Message from unregistered Telegram chat',
-        );
+        logger.debug({ chatJid, chatName }, 'Message from unregistered Telegram chat');
         return;
       }
 

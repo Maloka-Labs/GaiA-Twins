@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 
 import {
   ASSISTANT_NAME,
+  GROUPS_DIR,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -42,6 +43,7 @@ import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { runGeminiAgent } from './gemini-agent.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -53,6 +55,7 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+let containerAvailable = false;
 
 let whatsapp: WhatsAppChannel;
 const channels: Channel[] = [];
@@ -238,6 +241,37 @@ async function runAgent(
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
+  // === GEMINI DIRECT MODE (Railway — no Docker) ===
+  if (!containerAvailable) {
+    try {
+      logger.info({ group: group.name, chatJid }, 'Using Gemini direct mode (no container)');
+      const result = await runGeminiAgent({
+        prompt,
+        groupFolder: group.folder,
+        chatJid,
+        assistantName: ASSISTANT_NAME,
+      });
+
+      if (result.status === 'success' && result.result) {
+        // Deliver response via the onOutput callback
+        if (onOutput) {
+          await onOutput({
+            status: 'success',
+            result: result.result,
+          });
+        }
+        return 'success';
+      } else {
+        logger.error({ group: group.name, error: result.error }, 'Gemini agent error');
+        return 'error';
+      }
+    } catch (err) {
+      logger.error({ group: group.name, err }, 'Gemini agent error');
+      return 'error';
+    }
+  }
+
+  // === CONTAINER MODE (Docker available) ===
   const isMain = group.folder === MAIN_GROUP_FOLDER;
   const sessionId = sessions[group.folder];
 
@@ -430,11 +464,11 @@ function ensureContainerSystemRunning(): boolean {
 }
 
 async function main(): Promise<void> {
-  const containerAvailable = ensureContainerSystemRunning();
+  containerAvailable = ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
   if (!containerAvailable) {
-    logger.warn('Running without container isolation — agent features requiring Docker will be unavailable');
+    logger.warn('Running without container isolation — using Gemini direct mode');
   }
   loadState();
 
@@ -454,6 +488,18 @@ async function main(): Promise<void> {
     onChatMetadata: (chatJid: string, timestamp: string, name?: string, channel?: string, isGroup?: boolean) =>
       storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    onAutoRegister: (chatJid: string, chatName: string) => {
+      // Auto-register private Telegram chats with the default AI Twin (Max/healingmotions)
+      const defaultGroup: RegisteredGroup = {
+        name: chatName,
+        folder: 'healingmotions',
+        trigger: `@${ASSISTANT_NAME}`,
+        requiresTrigger: false,
+        added_at: new Date().toISOString(),
+      };
+      registerGroup(chatJid, defaultGroup);
+      logger.info({ chatJid, chatName, folder: 'healingmotions' }, 'Auto-registered Telegram chat');
+    },
   };
 
   // Create and connect channels
