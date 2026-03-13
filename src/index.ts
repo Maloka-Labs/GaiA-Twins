@@ -225,6 +225,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       logger.warn({ group: group.name }, 'Agent error after output was sent, skipping cursor rollback to prevent duplicates');
       return true;
     }
+    // Send a user-facing error message so they're not left waiting in silence
+    try {
+      await channel.sendMessage(chatJid,
+        '🌿 _I\'m having a moment — my AI brain needs a quick rest._ ' +
+        'This usually means the API quota is temporarily exhausted. ' +
+        'Please try again in a few minutes! 💨'
+      );
+    } catch { /* best effort */ }
     // Roll back cursor so retries can re-process these messages
     lastAgentTimestamp[chatJid] = previousCursor;
     saveState();
