@@ -3,7 +3,7 @@
  *
  * When running on Railway, Docker containers are unavailable.
  * This module provides a direct Gemini API integration that:
- * 1. Reads the group's CLAUDE.md and SOUL.md as system instructions
+ * 1. Reads the group's SEED.md and SOUL.md as system instructions
  * 2. Calls the Gemini API directly
  * 3. Returns the response text
  */
@@ -13,12 +13,22 @@ import path from 'path';
 import { GROUPS_DIR } from './config.js';
 import { logger } from './logger.js';
 import { readEnvFile } from './env.js';
+import { createGovernanceGate } from './governance/gate.js';
+
+/** Multimodal content part (forward-compatible with Flash-Lite 3.1) */
+export interface MediaPart {
+    type: 'image' | 'audio' | 'video';
+    mimeType: string;
+    data: string; // base64 or URI
+}
 
 export interface GeminiAgentInput {
     prompt: string;
     groupFolder: string;
     chatJid: string;
     assistantName?: string;
+    /** Multimodal attachments — ready for Flash-Lite 3.1 native processing */
+    media?: MediaPart[];
 }
 
 export interface GeminiAgentOutput {
@@ -27,7 +37,7 @@ export interface GeminiAgentOutput {
     error?: string;
 }
 
-/** Read the group's persona from CLAUDE.md and SOUL.md */
+/** Read the group's persona from SEED.md and SOUL.md */
 function loadPersona(groupFolder: string): string {
     const parts: string[] = [];
 
@@ -37,10 +47,10 @@ function loadPersona(groupFolder: string): string {
         parts.push(fs.readFileSync(soulPath, 'utf-8'));
     }
 
-    // Read the group's CLAUDE.md (specific persona)
-    const claudePath = path.join(GROUPS_DIR, groupFolder, 'CLAUDE.md');
-    if (fs.existsSync(claudePath)) {
-        parts.push(fs.readFileSync(claudePath, 'utf-8'));
+    // Read the group's SEED.md (AI-Twin Seed File)
+    const seedPath = path.join(GROUPS_DIR, groupFolder, 'SEED.md');
+    if (fs.existsSync(seedPath)) {
+        parts.push(fs.readFileSync(seedPath, 'utf-8'));
     }
 
     // If no persona files found, use a default
@@ -78,12 +88,47 @@ export async function runGeminiAgent(
             'Calling Gemini API directly (no container)',
         );
 
+        // ── LOVEval Governance Gate: PRE-FILTER ──
+        const gate = createGovernanceGate(input.groupFolder);
+        const preCheck = gate.checkInput(input.prompt);
+
+        if (!preCheck.allowed) {
+            // Crisis detected — return redirect message instead of calling LLM
+            logger.warn(
+                { group: input.groupFolder, flags: preCheck.flags },
+                'LOVEval Gate BLOCKED input — returning crisis redirect',
+            );
+            return {
+                status: 'success',
+                result: preCheck.redirectMessage || 'I\'m unable to help with that. Please reach out to a professional.',
+            };
+        }
+
+        // Build content parts (text + optional multimodal)
+        const contentParts: Array<Record<string, unknown>> = [{ text: input.prompt }];
+
+        // Add multimodal parts if present (forward-compatible with Flash-Lite 3.1)
+        if (input.media && input.media.length > 0) {
+            for (const media of input.media) {
+                contentParts.push({
+                    inlineData: {
+                        mimeType: media.mimeType,
+                        data: media.data,
+                    },
+                });
+            }
+            logger.info(
+                { mediaCount: input.media.length, types: input.media.map(m => m.type) },
+                'Multimodal content attached to Gemini request',
+            );
+        }
+
         // Build request body
         const requestBody = {
             contents: [
                 {
                     role: 'user',
-                    parts: [{ text: input.prompt }],
+                    parts: contentParts,
                 },
             ],
             systemInstruction: {
@@ -150,9 +195,20 @@ export async function runGeminiAgent(
             'Gemini response received',
         );
 
+        // ── LOVEval Governance Gate: POST-FILTER ──
+        const postCheck = gate.checkOutput(text, preCheck.flags);
+        const finalText = postCheck.modifiedText || text;
+
+        if (postCheck.flags.length > 0) {
+            logger.info(
+                { group: input.groupFolder, flags: postCheck.flags },
+                'LOVEval Gate post-filter applied',
+            );
+        }
+
         return {
             status: 'success',
-            result: text,
+            result: finalText,
         };
     } catch (err) {
         logger.error({ err }, 'Failed to call Gemini API');

@@ -1,3 +1,17 @@
+---
+twin_id: meliniseri
+practitioner: Melini Jesudason
+consent:
+  granted: true
+  date: "2026-03-01"
+  scope: text-only-prototype
+  revocable: true
+  data_sources:
+    - instagram_public
+    - youtube_public
+  voice_clone: pending
+---
+
 # Melini Jesudason AI Twin — @meliniseri
 
 ## ⚠️ REQUIRED: Read SOUL.md First

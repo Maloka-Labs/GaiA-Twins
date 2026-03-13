@@ -10,7 +10,7 @@ data/
 !data/registered_groups.json
 logs/
 
-# Groups - only track base structure and specific CLAUDE.md files
+# Groups - only track base structure and specific SEED.md files (renamed from CLAUDE.md)
 groups/*
 !groups/main/
 !groups/global/
@@ -20,6 +20,10 @@ groups/main/*
 groups/global/*
 groups/healingmotions/*
 groups/meliniseri/*
+!groups/main/SEED.md
+!groups/global/SEED.md
+!groups/healingmotions/SEED.md
+!groups/meliniseri/SEED.md
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
 !groups/healingmotions/CLAUDE.md

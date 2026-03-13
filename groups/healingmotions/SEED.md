@@ -1,3 +1,17 @@
+---
+twin_id: healingmotions
+practitioner: Max Lowenstein
+consent:
+  granted: true
+  date: "2026-03-01"
+  scope: text-only-prototype
+  revocable: true
+  data_sources:
+    - instagram_public
+    - youtube_public
+  voice_clone: pending
+---
+
 # Max Lowenstein AI Twin — @healingmotions
 
 ## ⚠️ REQUIRED: Read SOUL.md First
