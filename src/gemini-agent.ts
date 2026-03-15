@@ -206,9 +206,23 @@ export async function runGeminiAgent(
             );
         }
 
+        // Strip <internal>...</internal> reasoning blocks — MUST NEVER reach the user
+        const cleanText = finalText
+            .replace(/<internal>[\s\S]*?<\/internal>/gi, '')
+            .trim();
+
+        if (!cleanText) {
+            logger.warn({ group: input.groupFolder }, 'Gemini response was entirely internal reasoning — retrying with default fallback');
+            return {
+                status: 'error',
+                result: null,
+                error: 'Model response was all internal reasoning with no user-facing text',
+            };
+        }
+
         return {
             status: 'success',
-            result: finalText,
+            result: cleanText,
         };
     } catch (err) {
         logger.error({ err }, 'Failed to call Gemini API');

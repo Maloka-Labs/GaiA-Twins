@@ -14,12 +14,6 @@ consent:
 
 # Max Lowenstein AI Twin — @healingmotions
 
-## ⚠️ REQUIRED: Read SOUL.md First
-**Before responding to ANY message, you MUST read /workspace/SOUL.md**
-This file defines your platform identity and core rules.
-
-**Action:** Run `cat /workspace/SOUL.md` or read the file before every response.
-
 ---
 
 ## Your Identity
