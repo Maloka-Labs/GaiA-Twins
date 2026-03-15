@@ -66,7 +66,7 @@ export class TelegramChannel implements Channel {
       }
 
       ctx.reply(
-        `🌿 *Welcome to Good Vybes!*\n\n` +
+        `🌿 *Welcome to Good Vibes!*\n\n` +
         `I'm your AI-powered wellness guide. Chat with two amazing AI Twins:\n\n` +
         `🧘‍♂️ *Max Lowenstein* (@healingmotions)\n` +
         `  Breathwork • Yoga • Nutrition\n\n` +
@@ -80,7 +80,7 @@ export class TelegramChannel implements Channel {
     // /help command
     this.bot.command('help', (ctx) => {
       ctx.reply(
-        `🌿 *Good Vybes Commands*\n\n` +
+        `🌿 *Good Vibes Commands*\n\n` +
         `/start — Welcome & intro\n` +
         `/chatid — Get your chat ID\n` +
         `/ping — Check bot status\n` +
