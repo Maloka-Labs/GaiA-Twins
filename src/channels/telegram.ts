@@ -14,7 +14,7 @@ export interface TelegramChannelOpts {
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
   /** Called when a private chat needs auto-registration */
-  onAutoRegister?: (chatJid: string, chatName: string) => void;
+  onAutoRegister?: (chatJid: string, chatName: string, targetFolder?: string) => void;
 }
 
 export class TelegramChannel implements Channel {
@@ -52,17 +52,21 @@ export class TelegramChannel implements Channel {
       ctx.reply(`${ASSISTANT_NAME} is online. 🌿\nAI Twins: Max (@healingmotions) & Melini (@meliniseri)`);
     });
 
-    // /start command — welcome message
+    // /start command — welcome message + deep link routing
     this.bot.command('start', (ctx) => {
       const chatJid = `tg:${ctx.chat.id}`;
       const chatName = ctx.from?.first_name || 'friend';
 
-      // Auto-register private chats on /start
-      if (ctx.chat.type === 'private') {
-        const groups = this.opts.registeredGroups();
-        if (!groups[chatJid] && this.opts.onAutoRegister) {
-          this.opts.onAutoRegister(chatJid, chatName);
-        }
+      // Parse deep link payload (e.g. t.me/bot?start=melini -> ctx.match = 'melini')
+      const payload = (ctx.match || '').toString().toLowerCase().trim();
+      let targetFolder = 'healingmotions'; // default = Max
+      if (payload === 'melini' || payload === 'meliniseri') {
+        targetFolder = 'meliniseri';
+      }
+
+      // Register or switch twin for private chats
+      if (ctx.chat.type === 'private' && this.opts.onAutoRegister) {
+        this.opts.onAutoRegister(chatJid, chatName, targetFolder);
       }
 
       ctx.reply(
@@ -72,6 +76,7 @@ export class TelegramChannel implements Channel {
         `  Breathwork • Yoga • Nutrition\n\n` +
         `🧘‍♀️ *Melini Jesudason* (@meliniseri)\n` +
         `  Ashtanga • Inversions • Energy Healing\n\n` +
+        `Switch twins anytime: /max or /melini\n` +
         `Just send a message to start chatting! 💨`,
         { parse_mode: 'Markdown' },
       );
@@ -82,10 +87,39 @@ export class TelegramChannel implements Channel {
       ctx.reply(
         `🌿 *Good Vibes Commands*\n\n` +
         `/start — Welcome & intro\n` +
-        `/chatid — Get your chat ID\n` +
+        `/max — Switch to Max Lowenstein 🧘‍♂️\n` +
+        `/melini — Switch to Melini Jesudason 🧘‍♀️\n` +
         `/ping — Check bot status\n` +
         `/help — This menu\n\n` +
         `Or just type your question! 💬`,
+        { parse_mode: 'Markdown' },
+      );
+    });
+
+    // /max command — switch to Max
+    this.bot.command('max', (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const chatName = ctx.from?.first_name || 'friend';
+      if (this.opts.onAutoRegister) {
+        this.opts.onAutoRegister(chatJid, chatName, 'healingmotions');
+      }
+      ctx.reply(
+        `🧘‍♂️ *Switched to Max!*\n` +
+        `How can I help with your breathwork, nutrition or yoga today?`,
+        { parse_mode: 'Markdown' },
+      );
+    });
+
+    // /melini command — switch to Melini
+    this.bot.command('melini', (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const chatName = ctx.from?.first_name || 'friend';
+      if (this.opts.onAutoRegister) {
+        this.opts.onAutoRegister(chatJid, chatName, 'meliniseri');
+      }
+      ctx.reply(
+        `🧘‍♀️ *Switched to Melini!*\n` +
+        `Ready to explore Ashtanga, inversions and deep energy healing?`,
         { parse_mode: 'Markdown' },
       );
     });

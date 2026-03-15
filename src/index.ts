@@ -496,17 +496,18 @@ async function main(): Promise<void> {
     onChatMetadata: (chatJid: string, timestamp: string, name?: string, channel?: string, isGroup?: boolean) =>
       storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
-    onAutoRegister: (chatJid: string, chatName: string) => {
-      // Auto-register private Telegram chats with the default AI Twin (Max/healingmotions)
-      const defaultGroup: RegisteredGroup = {
+    onAutoRegister: (chatJid: string, chatName: string, targetFolder?: string) => {
+      const folder = targetFolder || 'healingmotions';
+      // Register or switch the AI Twin for this chat
+      const group: RegisteredGroup = {
         name: chatName,
-        folder: 'healingmotions',
+        folder,
         trigger: `@${ASSISTANT_NAME}`,
         requiresTrigger: false,
         added_at: new Date().toISOString(),
       };
-      registerGroup(chatJid, defaultGroup);
-      logger.info({ chatJid, chatName, folder: 'healingmotions' }, 'Auto-registered Telegram chat');
+      registerGroup(chatJid, group);
+      logger.info({ chatJid, chatName, folder }, 'Registered/switched Telegram chat twin');
     },
   };
 
