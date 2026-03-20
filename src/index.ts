@@ -46,6 +46,8 @@ import { startSchedulerLoop } from './task-scheduler.js';
 import { runGeminiAgent } from './gemini-agent.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { saveMemory, loadMemory } from './memory.js';
+import { searchKnowledge, seedTwinKnowledge } from './rag.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -480,6 +482,24 @@ async function main(): Promise<void> {
   }
   loadState();
 
+  // Seed twin knowledge into Qdrant asynchronously
+  setTimeout(async () => {
+    try {
+      const soulPath = path.resolve(process.cwd(), 'workspace', 'SOUL.md');
+      const soulContent = fs.existsSync(soulPath) ? fs.readFileSync(soulPath, 'utf-8') : '';
+      
+      const maxPath = path.join(GROUPS_DIR, 'healingmotions', 'SEED.md');
+      if (fs.existsSync(maxPath)) await seedTwinKnowledge('max', soulContent + '\n\n' + fs.readFileSync(maxPath, 'utf-8'));
+      
+      const meliniPath = path.join(GROUPS_DIR, 'meliniseri', 'SEED.md');
+      if (fs.existsSync(meliniPath)) await seedTwinKnowledge('melini', soulContent + '\n\n' + fs.readFileSync(meliniPath, 'utf-8'));
+      
+      logger.info('Twin knowledge seeded into RAG successfully');
+    } catch (e) {
+      logger.warn({ err: e }, 'Failed to seed twin knowledge');
+    }
+  }, 5000);
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
@@ -608,14 +628,24 @@ function startWebServer(): void {
           // Map twin name to group folder
           const groupFolder = twin === 'melini' ? 'meliniseri' : 'healingmotions';
           const twinName = twin === 'melini' ? 'Melini Jesudason' : 'Max Lowenstein';
+          const chatJidVoice = `voice:${twin}:user1`;
 
           logger.info({ twin, groupFolder, mimeType }, 'Voice request received');
 
+          // Load user memory (MIT RLM) and RAG knowledge in parallel
+          const [memoryContext, ragContext] = await Promise.all([
+            loadMemory(chatJidVoice, twin),
+            searchKnowledge('Voice query processing', twin),
+          ]);
+
+          // Save user message first (fire-and-forget)
+          saveMemory(chatJidVoice, twin, 'user', '[Voice Message]').catch(() => {});
+
           // Call Gemini with audio + persona
           const result = await runGeminiAgent({
-            prompt: `[Voice message from user] Please respond naturally and conversationally as ${twinName}. Keep your response under 3 sentences for a good voice experience.`,
+            prompt: `${memoryContext}${ragContext}[Voice message from user] Please respond naturally and conversationally as ${twinName}. Keep your response under 3 sentences for a good voice experience.`,
             groupFolder,
-            chatJid: `voice:${twin}`,
+            chatJid: chatJidVoice,
             assistantName: twinName,
             media: [{
               type: 'audio',
@@ -624,9 +654,16 @@ function startWebServer(): void {
             }],
           });
 
+          const responseText = result.status === 'success' && result.result
+            ? result.result
+            : '¡Hola! Could you repeat that? I didn\'t quite catch it.';
+
+          // Save assistant response to memory (fire-and-forget)
+          saveMemory(chatJidVoice, twin, 'assistant', responseText).catch(() => {});
+
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
-            text: result.status === 'success' ? result.result : '¡Hola! Could you repeat that? I didn\'t quite catch it.',
+            text: responseText,
             twin,
           }));
         } catch (err) {
