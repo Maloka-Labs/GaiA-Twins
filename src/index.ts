@@ -641,6 +641,9 @@ function startWebServer(): void {
           // Save user message first (fire-and-forget)
           saveMemory(chatJidVoice, twin, 'user', '[Voice Message]').catch(() => {});
 
+          // Sanitize mimeType (Gemini API strictly rejects parameter suffixes like ;codecs=opus)
+          const cleanMimeType = (mimeType || 'audio/webm').split(';')[0].trim();
+
           // Call Gemini with audio + persona
           const result = await runGeminiAgent({
             prompt: `${memoryContext}${ragContext}[Voice message from user] Please respond naturally and conversationally as ${twinName}. Keep your response under 3 sentences for a good voice experience.`,
@@ -649,7 +652,7 @@ function startWebServer(): void {
             assistantName: twinName,
             media: [{
               type: 'audio',
-              mimeType: mimeType || 'audio/webm',
+              mimeType: cleanMimeType,
               data: audioBase64,
             }],
           });
