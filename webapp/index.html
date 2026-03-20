@@ -1083,12 +1083,10 @@
     async function sendAudioToBackend(audioBlob, twin) {
       document.getElementById('callStatus').textContent = '⏳ Thinking...';
       try {
-        // Convert blob to base64
+        if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
+
         const buffer = await audioBlob.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-        const base64 = btoa(binary);
+        const base64 = btoa(new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
 
         const response = await fetch(VOICE_API, {
           method: 'POST',
@@ -1100,13 +1098,22 @@
           }),
         });
 
-        if (!response.ok) throw new Error(`Server error ${response.status}`);
+        if (!response.ok) {
+           const errData = await response.json().catch(() => ({}));
+           throw new Error(errData.error || `Server error ${response.status}`);
+        }
+        
         const data = await response.json();
-        speakResponse(data.text || 'Sorry, I could not understand. Try again!', twin);
+        if (data.text) {
+          speakResponse(data.text, twin);
+        } else {
+          throw new Error('No text returned from AI');
+        }
       } catch (err) {
         console.error('Voice API error:', err);
-        document.getElementById('callStatus').textContent = '❌ Error — try again';
-        speakResponse('Sorry, something went wrong. Please try again!', twin);
+        document.getElementById('callStatus').textContent = '⚠️ ' + (err.message || 'System busy');
+        speakResponse('¡Hola! Sorry, I missed that. Could you repeat it?', twin);
+        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
       }
     }
 

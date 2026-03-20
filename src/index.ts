@@ -630,13 +630,15 @@ function startWebServer(): void {
           const twinName = twin === 'melini' ? 'Melini Jesudason' : 'Max Lowenstein';
           const chatJidVoice = `voice:${twin}:user1`;
 
-          logger.info({ twin, groupFolder, mimeType }, 'Voice request received');
-
-          // Load user memory (MIT RLM) and RAG knowledge in parallel
+          logger.info({ twin, groupFolder, mimeType, audioSize: audioBase64.length }, 'Voice request processing started');
+          
+          // Load context with a timeout so we don't hang if Supabase/Qdrant is slow
           const [memoryContext, ragContext] = await Promise.all([
-            loadMemory(chatJidVoice, twin),
-            searchKnowledge('Voice query processing', twin),
+            loadMemory(chatJidVoice, twin).catch(e => { logger.warn({e}, 'Memory skip'); return ''; }),
+            searchKnowledge('Voice query processing', twin).catch(e => { logger.warn({e}, 'RAG skip'); return ''; }),
           ]);
+
+          logger.debug({ hasMemory: !!memoryContext, hasRag: !!ragContext }, 'Context loaded');
 
           // Save user message first (fire-and-forget)
           saveMemory(chatJidVoice, twin, 'user', '[Voice Message]').catch(() => {});
