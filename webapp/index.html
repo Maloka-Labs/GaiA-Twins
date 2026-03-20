@@ -1115,9 +1115,14 @@
       const info = TWINS[twin];
       const modal = document.getElementById('callModal');
 
-      // Unlock Mobile TTS API on direct user interaction
-      const unlock = new SpeechSynthesisUtterance('');
-      window.speechSynthesis.speak(unlock);
+      // Unlock Mobile TTS API safely without crashing the button
+      try {
+        if ('speechSynthesis' in window && window.SpeechSynthesisUtterance) {
+          window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(''));
+        }
+      } catch (e) {
+        console.warn('SpeechSynthesis disabled or unavailable:', e);
+      }
 
       if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
