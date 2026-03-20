@@ -1115,6 +1115,10 @@
       const info = TWINS[twin];
       const modal = document.getElementById('callModal');
 
+      // Unlock Mobile TTS API on direct user interaction
+      const unlock = new SpeechSynthesisUtterance('');
+      window.speechSynthesis.speak(unlock);
+
       if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
       document.getElementById('callAvatar').textContent = info.avatar;
