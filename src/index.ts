@@ -578,10 +578,63 @@ function startWebServer(): void {
   const webappDir = path.join(__dirname, '..', 'webapp');
 
   const server = http.createServer((req, res) => {
+    // CORS — Telegram Mini App needs this
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
     // Health check endpoint for Railway
     if (req.url === '/health' || req.url === '/healthz') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', service: 'nanoclaw-maloka' }));
+      return;
+    }
+
+    // ===== VOICE ENDPOINT =====
+    // POST /voice { audioBase64: string, mimeType: string, twin: 'max'|'melini' }
+    if (req.method === 'POST' && req.url === '/voice') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk.toString(); });
+      req.on('end', async () => {
+        try {
+          const { audioBase64, mimeType, twin } = JSON.parse(body);
+          if (!audioBase64 || !twin) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing audioBase64 or twin' }));
+            return;
+          }
+
+          // Map twin name to group folder
+          const groupFolder = twin === 'melini' ? 'meliniseri' : 'healingmotions';
+          const twinName = twin === 'melini' ? 'Melini Jesudason' : 'Max Lowenstein';
+
+          logger.info({ twin, groupFolder, mimeType }, 'Voice request received');
+
+          // Call Gemini with audio + persona
+          const result = await runGeminiAgent({
+            prompt: `[Voice message from user] Please respond naturally and conversationally as ${twinName}. Keep your response under 3 sentences for a good voice experience.`,
+            groupFolder,
+            chatJid: `voice:${twin}`,
+            assistantName: twinName,
+            media: [{
+              type: 'audio',
+              mimeType: mimeType || 'audio/webm',
+              data: audioBase64,
+            }],
+          });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            text: result.status === 'success' ? result.result : '¡Hola! Could you repeat that? I didn\'t quite catch it.',
+            twin,
+          }));
+        } catch (err) {
+          logger.error({ err }, 'Voice endpoint error');
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Internal server error' }));
+        }
+      });
       return;
     }
 
@@ -605,6 +658,7 @@ function startWebServer(): void {
     logger.info({ port }, `Mini App web server listening on port ${port}`);
   });
 }
+
 
 // Guard: only run when executed directly, not when imported by tests
 const isDirectRun =

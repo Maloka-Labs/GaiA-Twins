@@ -980,24 +980,24 @@
     document.querySelector('.quote-text').style.transition = 'opacity 0.4s ease';
     document.querySelector('.quote-author').style.transition = 'opacity 0.4s ease';
 
-    // ===== WEBRTC VOICE ENGINE =====
-    // This is the MVP skeleton — replaces with PersonaPlex-7B WebSocket when GPU is ready.
-    // BACKEND_WS_URL will be set to the Railway/PersonaPlex endpoint URL.
-    const BACKEND_WS_URL = null; // e.g. 'wss://gaia-twins-production.up.railway.app/voice'
+    // ===== COMPLETE VOICE PIPELINE =====
+    // Backend URL — always same origin (Railway serves both the webapp and the /voice endpoint)
+    const VOICE_API = '/voice';
 
     let mediaStream = null;
     let audioContext = null;
     let analyser = null;
     let mediaRecorder = null;
-    let ws = null;
+    let recordedChunks = [];
     let callTimerInterval = null;
     let callSeconds = 0;
     let visualizerRAF = null;
     let currentTwin = null;
+    let isRecording = false;
 
     const TWINS = {
-      max: { name: 'Max Lowenstein', avatar: '🧘‍♂️', cssClass: 'max-call' },
-      melini: { name: 'Melini Jesudason', avatar: '🧘‍♀️', cssClass: 'melini-call' },
+      max: { name: 'Max Lowenstein', avatar: '🧘‍♂️', cssClass: 'max-call', voiceGender: 'male' },
+      melini: { name: 'Melini Jesudason', avatar: '🧘‍♀️', cssClass: 'melini-call', voiceGender: 'female' },
     };
 
     // Build visualizer bars
@@ -1030,15 +1030,93 @@
       document.getElementById('callTimer').textContent = `${m}:${s}`;
     }
 
+    // Pick the best browser voice for the twin
+    function pickVoice(gender) {
+      const voices = window.speechSynthesis.getVoices();
+      // Prefer English voices matching gender
+      const preferred = voices.filter(v =>
+        v.lang.startsWith('en') &&
+        (gender === 'female'
+          ? v.name.match(/female|woman|samantha|karen|victoria|moira|tessa|fiona/i)
+          : v.name.match(/male|man|daniel|alex|fred|arthur|thomas|oliver/i))
+      );
+      if (preferred.length) return preferred[0];
+      // Any English voice
+      const english = voices.filter(v => v.lang.startsWith('en'));
+      if (english.length) return english[0];
+      return null;
+    }
+
+    // Speak text aloud and show it on screen
+    function speakResponse(text, twin) {
+      const info = TWINS[twin];
+      document.getElementById('callStatus').textContent = `${info.avatar} Speaking...`;
+
+      // Show transcript
+      let transcriptEl = document.getElementById('callTranscript');
+      if (!transcriptEl) {
+        transcriptEl = document.createElement('div');
+        transcriptEl.id = 'callTranscript';
+        transcriptEl.style.cssText = `
+          max-width: 300px; padding: 12px 16px; border-radius: 16px;
+          background: rgba(255,255,255,0.07); font-size: 14px; line-height: 1.5;
+          color: #e0e0f0; text-align: center; margin: 0 auto;
+        `;
+        document.getElementById('callTimer').insertAdjacentElement('beforebegin', transcriptEl);
+      }
+      transcriptEl.textContent = `"${text}"`;
+
+      // Speak with Web Speech API
+      window.speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 0.92;
+      utt.pitch = info.voiceGender === 'female' ? 1.1 : 0.9;
+      utt.volume = 1;
+      const voice = pickVoice(info.voiceGender);
+      if (voice) utt.voice = voice;
+      utt.onend = () => {
+        document.getElementById('callStatus').textContent = '🎙️ Hold button to speak';
+      };
+      window.speechSynthesis.speak(utt);
+    }
+
+    async function sendAudioToBackend(audioBlob, twin) {
+      document.getElementById('callStatus').textContent = '⏳ Thinking...';
+      try {
+        // Convert blob to base64
+        const buffer = await audioBlob.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        const base64 = btoa(binary);
+
+        const response = await fetch(VOICE_API, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioBase64: base64,
+            mimeType: audioBlob.type || 'audio/webm',
+            twin,
+          }),
+        });
+
+        if (!response.ok) throw new Error(`Server error ${response.status}`);
+        const data = await response.json();
+        speakResponse(data.text || 'Sorry, I could not understand. Try again!', twin);
+      } catch (err) {
+        console.error('Voice API error:', err);
+        document.getElementById('callStatus').textContent = '❌ Error — try again';
+        speakResponse('Sorry, something went wrong. Please try again!', twin);
+      }
+    }
+
     async function startCall(twin) {
       currentTwin = twin;
       const info = TWINS[twin];
       const modal = document.getElementById('callModal');
 
-      // Haptic feedback
       if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('heavy');
 
-      // Configure modal
       document.getElementById('callAvatar').textContent = info.avatar;
       document.getElementById('callName').textContent = info.name;
       document.getElementById('callStatus').textContent = 'Requesting microphone...';
@@ -1046,79 +1124,115 @@
       modal.className = `call-modal active ${info.cssClass}`;
 
       try {
-        // Request microphone
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-        document.getElementById('callStatus').textContent = '🔴 Live — Speak now';
 
-        // Audio visualiser
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         analyser = audioContext.createAnalyser();
         analyser.fftSize = 64;
         const source = audioContext.createMediaStreamSource(mediaStream);
         source.connect(analyser);
-        animateBars();
 
-        // Start timer
         callSeconds = 0;
         callTimerInterval = setInterval(updateTimer, 1000);
 
-        // --- WebSocket to PersonaPlex (activate when GPU is ready) ---
-        if (BACKEND_WS_URL) {
-          ws = new WebSocket(`${BACKEND_WS_URL}?twin=${twin}`);
-          ws.binaryType = 'arraybuffer';
-          ws.onopen = () => {
-            document.getElementById('callStatus').textContent = `🔴 Connected to ${info.name}`;
-            // Start streaming audio chunks
-            mediaRecorder = new MediaRecorder(mediaStream, { mimeType: 'audio/webm;codecs=opus' });
-            mediaRecorder.ondataavailable = (e) => {
-              if (ws && ws.readyState === WebSocket.OPEN && e.data.size > 0) {
-                ws.send(e.data);
-              }
-            };
-            mediaRecorder.start(250); // 250ms chunks for low latency
-          };
-          ws.onmessage = (event) => {
-            // AI responds with audio — play it back
-            if (event.data instanceof ArrayBuffer) {
-              const blob = new Blob([event.data], { type: 'audio/mpeg' });
-              const url = URL.createObjectURL(blob);
-              const audio = new Audio(url);
-              audio.play();
-            }
-          };
-          ws.onerror = () => {
-            document.getElementById('callStatus').textContent = '⚠️ Connection error — retrying...';
-          };
-          ws.onclose = () => endCall();
-        } else {
-          // MVP demo mode (no GPU yet) — microphone works, AI voice coming soon
-          document.getElementById('callStatus').textContent = '🎙️ Mic active — AI voice endpoint coming soon';
+        document.getElementById('callStatus').textContent = '🎙️ Hold button to speak';
+
+        // Switch end-call button to push-to-talk while call is active
+        const endBtn = document.querySelector('.end-call-btn');
+        endBtn.textContent = '🎙️';
+        endBtn.style.background = '#1a1a3e';
+        endBtn.style.boxShadow = 'none';
+        endBtn.setAttribute('data-mode', 'ptt');
+        endBtn.onmousedown = endBtn.ontouchstart = startRecording;
+        endBtn.onmouseup = endBtn.ontouchend = stopRecording;
+
+        // Add hang-up button separately
+        if (!document.getElementById('hangupBtn')) {
+          const hangup = document.createElement('button');
+          hangup.id = 'hangupBtn';
+          hangup.className = 'end-call-btn';
+          hangup.textContent = '📵';
+          hangup.onclick = endCall;
+          endBtn.insertAdjacentElement('afterend', hangup);
         }
 
+        animateBars();
       } catch (err) {
         document.getElementById('callStatus').textContent = '❌ Microphone access denied';
-        console.error('Voice call error:', err);
+        console.error('Mic error:', err);
       }
+    }
+
+    function startRecording(e) {
+      e.preventDefault();
+      if (isRecording || !mediaStream) return;
+      isRecording = true;
+      recordedChunks = [];
+
+      // Determine best supported format
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : 'audio/ogg';
+
+      mediaRecorder = new MediaRecorder(mediaStream, { mimeType });
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.start(100);
+
+      document.getElementById('callStatus').textContent = '🔴 Recording... release to send';
+      const btn = document.querySelector('.end-call-btn[data-mode="ptt"]');
+      if (btn) { btn.textContent = '🔴'; btn.style.background = '#ff3b30'; btn.style.boxShadow = '0 0 20px rgba(255,59,48,0.5)'; }
+
+      if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    }
+
+    function stopRecording(e) {
+      e.preventDefault();
+      if (!isRecording || !mediaRecorder) return;
+      isRecording = false;
+
+      const btn = document.querySelector('.end-call-btn[data-mode="ptt"]');
+      if (btn) { btn.textContent = '🎙️'; btn.style.background = '#1a1a3e'; btn.style.boxShadow = 'none'; }
+
+      mediaRecorder.onstop = () => {
+        if (recordedChunks.length === 0) return;
+        const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
+        sendAudioToBackend(blob, currentTwin);
+      };
+      mediaRecorder.stop();
+
+      if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     }
 
     function endCall() {
       const modal = document.getElementById('callModal');
       modal.className = 'call-modal';
 
-      // Stop streams
+      window.speechSynthesis.cancel();
       if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-      if (mediaRecorder) { try { mediaRecorder.stop(); } catch(e) {} mediaRecorder = null; }
-      if (ws) { ws.close(); ws = null; }
+      if (mediaRecorder && isRecording) { try { mediaRecorder.stop(); } catch(e) {} }
+      mediaRecorder = null; isRecording = false;
       if (audioContext) { audioContext.close(); audioContext = null; analyser = null; }
       if (callTimerInterval) { clearInterval(callTimerInterval); callTimerInterval = null; }
       if (visualizerRAF) { cancelAnimationFrame(visualizerRAF); visualizerRAF = null; }
 
-      // Reset bars
       bars.forEach(bar => { bar.style.height = '4px'; });
+
+      // Reset buttons
+      const endBtn = document.querySelector('.end-call-btn');
+      if (endBtn) { endBtn.textContent = '📵'; endBtn.style.background = '#ff3b30'; endBtn.style.boxShadow = '0 0 20px rgba(255,59,48,0.5)'; endBtn.setAttribute('data-mode', ''); endBtn.onclick = endCall; endBtn.onmousedown = endBtn.ontouchstart = endBtn.onmouseup = endBtn.ontouchend = null; }
+      const hangup = document.getElementById('hangupBtn');
+      if (hangup) hangup.remove();
+      const transcript = document.getElementById('callTranscript');
+      if (transcript) transcript.remove();
 
       if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('warning');
     }
+
+    // Preload voices on page load
+    window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
   </script>
 </body>
 
-</html>
+</html>
