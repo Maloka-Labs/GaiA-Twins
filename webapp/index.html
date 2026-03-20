@@ -1239,8 +1239,10 @@
       if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('warning');
     }
 
-    // Preload voices on page load
-    window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    // Preload voices on page load if supported
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+    }
   </script>
 </body>
 
