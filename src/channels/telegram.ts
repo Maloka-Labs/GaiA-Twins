@@ -8,6 +8,11 @@ import {
   OnInboundMessage,
   RegisteredGroup,
 } from '../types.js';
+import fs from 'fs';
+import path from 'path';
+import { InputFile } from 'grammy';
+import { MediaPart } from '../gemini-agent.js';
+import { generateEnglishVoice } from '../services/voice-xtts.js';
 
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
@@ -235,10 +240,49 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) =>
-      storeNonText(ctx, '[Voice message]'),
-    );
-    this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
+    const processAudioMessage = async (ctx: any, fileId: string, mime: string) => {
+        const chatJid = `tg:${ctx.chat.id}`;
+        const group = this.opts.registeredGroups()[chatJid];
+        if (!group) return;
+
+        try {
+            const file = await this.bot!.api.getFile(fileId);
+            const response = await fetch(`https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`);
+            const buffer = await response.arrayBuffer();
+            const base64Audio = Buffer.from(buffer).toString('base64');
+
+            const timestamp = new Date(ctx.message.date * 1000).toISOString();
+            const senderName = ctx.from?.first_name || 'Unknown';
+
+            const mediaObj: MediaPart = {
+                type: 'audio',
+                mimeType: mime, 
+                data: base64Audio
+            };
+
+            this.opts.onMessage(chatJid, {
+                id: ctx.message.message_id.toString(),
+                chat_jid: chatJid,
+                sender: ctx.from?.id?.toString() || '',
+                sender_name: senderName,
+                content: `@${ASSISTANT_NAME || 'bot'} Attached Voice Note`, 
+                media: [mediaObj], 
+                timestamp,
+                is_from_me: false,
+            });
+        } catch (err) {
+            logger.error({ err }, 'Failed to process incoming audio/voice note');
+            storeNonText(ctx, '[Voice message but failed to process audio]');
+        }
+    };
+
+    this.bot.on('message:voice', async (ctx) => {
+        await processAudioMessage(ctx, ctx.message.voice.file_id, 'audio/ogg');
+    });
+    this.bot.on('message:audio', async (ctx) => {
+        const mime = ctx.message.audio.mime_type || 'audio/mp3';
+        await processAudioMessage(ctx, ctx.message.audio.file_id, mime);
+    });
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
       storeNonText(ctx, `[Document: ${name}]`);
@@ -285,7 +329,24 @@ export class TelegramChannel implements Channel {
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
-        await this.bot.api.sendMessage(numericId, text);
+        // Resolve twin identity for voice clone
+        const isMelini = text.toLowerCase().includes('inversions') || text.toLowerCase().includes('ashtanga');
+        const twinIdentity = isMelini ? 'melini' : 'max';
+
+        try {
+            const audioClonado = await generateEnglishVoice(twinIdentity, text);
+            if (audioClonado && fs.existsSync(audioClonado)) {
+                await this.bot!.api.sendVoice(numericId, new InputFile(audioClonado), {
+                    caption: text
+                });
+                fs.unlinkSync(audioClonado);
+            } else {
+                await this.bot!.api.sendMessage(numericId, text);
+            }
+        } catch (err) {
+            logger.error({ err, jid }, 'Failed to generate XTTS voice, falling back to text');
+            await this.bot!.api.sendMessage(numericId, text);
+        }
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
           await this.bot.api.sendMessage(

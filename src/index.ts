@@ -48,6 +48,8 @@ import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 import { saveMemory, loadMemory } from './memory.js';
 import { searchKnowledge, seedTwinKnowledge } from './rag.js';
+import { syncInstagramPersona } from './rag/instagram-miner.js';
+import { MediaPart } from './gemini-agent.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -193,7 +195,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
+  const combinedMedia = missedMessages.flatMap(m => m.media || []);
+
+  const output = await runAgent(group, prompt, chatJid, combinedMedia.length > 0 ? combinedMedia : undefined, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
@@ -249,6 +253,7 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  media?: MediaPart[],
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   // === GEMINI DIRECT MODE (Railway — no Docker) ===
@@ -260,6 +265,7 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         assistantName: ASSISTANT_NAME,
+        media,
       });
 
       if (result.status === 'success' && result.result) {
@@ -494,6 +500,10 @@ async function main(): Promise<void> {
       const meliniPath = path.join(GROUPS_DIR, 'meliniseri', 'SEED.md');
       if (fs.existsSync(meliniPath)) await seedTwinKnowledge('melini', soulContent + '\n\n' + fs.readFileSync(meliniPath, 'utf-8'));
       
+      // Sync IG Persona (PersonaPlex)
+      await syncInstagramPersona('max');
+      await syncInstagramPersona('melini');
+
       logger.info('Twin knowledge seeded into RAG successfully');
     } catch (e) {
       logger.warn({ err: e }, 'Failed to seed twin knowledge');
@@ -661,16 +671,36 @@ function startWebServer(): void {
 
           const responseText = result.status === 'success' && result.result
             ? result.result
-            : '¡Hola! Could you repeat that? I didn\'t quite catch it.';
+            : 'Sorry, I couldn\'t hear you clearly. Could you repeat that?';
 
           // Save assistant response to memory (fire-and-forget)
           saveMemory(chatJidVoice, twin, 'assistant', responseText).catch(() => {});
 
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            text: responseText,
-            twin,
-          }));
+          try {
+             const fs = require('fs');
+             const { generateEnglishVoice } = require('./services/voice-xtts.js');
+             const audioPath = await generateEnglishVoice(twin, responseText);
+             const audioBuffer = fs.readFileSync(audioPath);
+             const ttsAudioBase64 = audioBuffer.toString('base64');
+             
+             // Cleanup if needed
+             fs.unlinkSync(audioPath);
+
+             res.writeHead(200, { 'Content-Type': 'application/json' });
+             res.end(JSON.stringify({
+               status: 'success',
+               text: responseText,
+               ttsAudioBase64
+             }));
+          } catch(err) {
+             logger.error({err}, 'Edge TTS generation failed in webapp');
+             res.writeHead(200, { 'Content-Type': 'application/json' });
+             res.end(JSON.stringify({
+               status: 'success',
+               text: responseText
+             }));
+          }
+
         } catch (err) {
           logger.error({ err }, 'Voice endpoint error');
           res.writeHead(500, { 'Content-Type': 'application/json' });

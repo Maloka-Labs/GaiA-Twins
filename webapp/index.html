@@ -994,6 +994,7 @@
     let visualizerRAF = null;
     let currentTwin = null;
     let isRecording = false;
+    let vadInterval = null;
 
     const TWINS = {
       max: { name: 'Max Lowenstein', avatar: '🧘‍♂️', cssClass: 'max-call', voiceGender: 'male' },
@@ -1010,6 +1011,47 @@
       vizEl.appendChild(bar);
     }
     const bars = vizEl.querySelectorAll('.vis-bar');
+
+    function startVAD() {
+      if (vadInterval) clearInterval(vadInterval);
+      let silenceStart = 0;
+      let speakingStart = 0;
+      
+      vadInterval = setInterval(() => {
+        if (!analyser) return;
+        const status = document.getElementById('callStatus').textContent;
+        // Do not listen while bot is thinking or speaking to prevent echo loops
+        if (status.includes('Thinking') || status.includes('Speaking')) return;
+        
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) sum += data[i];
+        const avg = sum / data.length;
+        
+        const now = Date.now();
+        // 10 is a general volume noise floor, adjust if needed
+        if (avg > 15) {
+          silenceStart = 0;
+          if (!speakingStart) speakingStart = now;
+          
+          if (!isRecording && (now - speakingStart > 200)) {
+            startRecording(new Event('vad'));
+          }
+        } else {
+           speakingStart = 0;
+           if (isRecording) {
+             if (!silenceStart) silenceStart = now;
+             
+             // Wait 1.8s of silence before cutting off
+             if (now - silenceStart > 1800) {
+               stopRecording(new Event('vad'));
+               silenceStart = 0;
+             }
+           }
+        }
+      }, 100);
+    }
 
     function animateBars() {
       if (!analyser) return;
@@ -1048,7 +1090,7 @@
     }
 
     // Speak text aloud and show it on screen
-    function speakResponse(text, twin) {
+    function speakResponse(text, twin, audioBase64) {
       const info = TWINS[twin];
       document.getElementById('callStatus').textContent = `${info.avatar} Speaking...`;
 
@@ -1066,7 +1108,21 @@
       }
       transcriptEl.textContent = `"${text}"`;
 
-      // Speak with Web Speech API
+      // Play High Quality Neural Audio if available
+      if (audioBase64) {
+        window.speechSynthesis.cancel();
+        const audio = new Audio(`data:audio/mp3;base64,${audioBase64}`);
+        audio.onended = () => {
+          document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
+        };
+        audio.play().catch(e => {
+          console.error('Audio playback failed', e);
+          document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
+        });
+        return;
+      }
+
+      // Fallback to robotic browser Web Speech API
       window.speechSynthesis.cancel();
       const utt = new SpeechSynthesisUtterance(text);
       utt.rate = 0.92;
@@ -1075,7 +1131,7 @@
       const voice = pickVoice(info.voiceGender);
       if (voice) utt.voice = voice;
       utt.onend = () => {
-        document.getElementById('callStatus').textContent = '🎙️ Hold button to speak';
+        document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
       };
       window.speechSynthesis.speak(utt);
     }
@@ -1104,15 +1160,15 @@
         }
         
         const data = await response.json();
-        if (data.text) {
-          speakResponse(data.text, twin);
+        if (data.text || data.ttsAudioBase64) {
+          speakResponse(data.text || 'Error: No text', twin, data.ttsAudioBase64);
         } else {
           throw new Error('No text returned from AI');
         }
       } catch (err) {
         console.error('Voice API error:', err);
         document.getElementById('callStatus').textContent = '⚠️ ' + (err.message || 'System busy');
-        speakResponse('¡Hola! Sorry, I missed that. Could you repeat it?', twin);
+        speakResponse('Sorry, I couldn\'t hear you clearly. Could you repeat that?', twin);
         if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
       }
     }
@@ -1151,20 +1207,15 @@
         callSeconds = 0;
         callTimerInterval = setInterval(updateTimer, 1000);
 
-        document.getElementById('callStatus').textContent = '🎙️ Hold button to speak';
+        document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
 
-        // Switch end-call button to push-to-talk while call is active
         const endBtn = document.querySelector('.end-call-btn');
-        endBtn.textContent = '🎙️';
-        endBtn.style.background = '#1a1a3e';
-        endBtn.style.boxShadow = 'none';
-        endBtn.setAttribute('data-mode', 'ptt');
-        endBtn.onmousedown = endBtn.ontouchstart = startRecording;
-        endBtn.onmouseup = endBtn.ontouchend = stopRecording;
+        endBtn.style.display = 'none'; // Hide Walkie-Talkie Button completely
 
-        // Add hang-up button separately
-        if (!document.getElementById('hangupBtn')) {
-          const hangup = document.createElement('button');
+        // Add hang-up button in center
+        let hangup = document.getElementById('hangupBtn');
+        if (!hangup) {
+          hangup = document.createElement('button');
           hangup.id = 'hangupBtn';
           hangup.className = 'end-call-btn';
           hangup.textContent = '📵';
@@ -1173,6 +1224,7 @@
         }
 
         animateBars();
+        startVAD();
       } catch (err) {
         document.getElementById('callStatus').textContent = '❌ Microphone access denied';
         console.error('Mic error:', err);
@@ -1196,20 +1248,14 @@
       mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
       mediaRecorder.start(100);
 
-      document.getElementById('callStatus').textContent = '🔴 Recording... release to send';
-      const btn = document.querySelector('.end-call-btn[data-mode="ptt"]');
-      if (btn) { btn.textContent = '🔴'; btn.style.background = '#ff3b30'; btn.style.boxShadow = '0 0 20px rgba(255,59,48,0.5)'; }
-
+      document.getElementById('callStatus').textContent = '🔴 Listening... (Wait till quiet to send)';
       if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
     }
 
     function stopRecording(e) {
-      e.preventDefault();
+      if (e) e.preventDefault();
       if (!isRecording || !mediaRecorder) return;
       isRecording = false;
-
-      const btn = document.querySelector('.end-call-btn[data-mode="ptt"]');
-      if (btn) { btn.textContent = '🎙️'; btn.style.background = '#1a1a3e'; btn.style.boxShadow = 'none'; }
 
       mediaRecorder.onstop = () => {
         if (recordedChunks.length === 0) return;
@@ -1232,12 +1278,13 @@
       if (audioContext) { audioContext.close(); audioContext = null; analyser = null; }
       if (callTimerInterval) { clearInterval(callTimerInterval); callTimerInterval = null; }
       if (visualizerRAF) { cancelAnimationFrame(visualizerRAF); visualizerRAF = null; }
+      if (vadInterval) { clearInterval(vadInterval); vadInterval = null; }
 
       bars.forEach(bar => { bar.style.height = '4px'; });
 
       // Reset buttons
       const endBtn = document.querySelector('.end-call-btn');
-      if (endBtn) { endBtn.textContent = '📵'; endBtn.style.background = '#ff3b30'; endBtn.style.boxShadow = '0 0 20px rgba(255,59,48,0.5)'; endBtn.setAttribute('data-mode', ''); endBtn.onclick = endCall; endBtn.onmousedown = endBtn.ontouchstart = endBtn.onmouseup = endBtn.ontouchend = null; }
+      if (endBtn) { endBtn.style.display = 'flex'; endBtn.textContent = '📵'; endBtn.style.background = '#ff3b30'; endBtn.style.boxShadow = '0 0 20px rgba(255,59,48,0.5)'; endBtn.setAttribute('data-mode', ''); endBtn.onclick = endCall; endBtn.onmousedown = endBtn.ontouchstart = endBtn.onmouseup = endBtn.ontouchend = null; }
       const hangup = document.getElementById('hangupBtn');
       if (hangup) hangup.remove();
       const transcript = document.getElementById('callTranscript');

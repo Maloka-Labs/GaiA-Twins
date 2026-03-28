@@ -50,6 +50,7 @@ export interface NewMessage {
   timestamp: string;
   is_from_me?: boolean;
   is_bot_message?: boolean;
+  media?: import('./gemini-agent.js').MediaPart[];
 }
 
 export interface ScheduledTask {

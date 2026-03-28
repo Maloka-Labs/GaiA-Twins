@@ -1,0 +1,15 @@
+[providers]
+  node = {}
+  python = {}
+
+[phases.setup]
+  nixPkgs = ["nodejs", "python3", "ffmpeg"]
+
+[phases.install]
+  cmds = ["npm ci", "pip install --break-system-packages edge-tts"]
+
+[phases.build]
+  cmds = ["npm run build"]
+
+[start]
+  cmd = "npm start"
