@@ -22,7 +22,11 @@ import {
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
-import { cleanupOrphans, ensureContainerRuntimeRunning } from './container-runtime.js';
+import {
+  cleanupOrphans,
+  ensureContainerRuntimeRunning,
+} from './container-runtime.js';
+import { generateEnglishVoice } from './services/voice-xtts.js';
 import {
   getAllChats,
   getAllRegisteredGroups,
@@ -677,8 +681,6 @@ function startWebServer(): void {
           saveMemory(chatJidVoice, twin, 'assistant', responseText).catch(() => {});
 
           try {
-             const fs = require('fs');
-             const { generateEnglishVoice } = require('./services/voice-xtts.js');
              const audioPath = await generateEnglishVoice(twin, responseText);
              const audioBuffer = fs.readFileSync(audioPath);
              const ttsAudioBase64 = audioBuffer.toString('base64');

@@ -1,30 +1,48 @@
 import path from 'path';
-import { exec } from 'child_process';
+import fs from 'fs';
+import { execFile } from 'child_process';
 import util from 'util';
 
-const execAsync = util.promisify(exec);
+const execFileAsync = util.promisify(execFile);
 
 export async function generateEnglishVoice(twin: 'max' | 'melini', text: string): Promise<string> {
   const outputPath = path.join(process.cwd(), `tmp_${twin}_${Date.now()}.mp3`);
   
-  // Clean text to avoid breaking the TTS command line
-  const cleanEnglish = text.replace(/["\\]/g, '').replace(/[*_~\[\]]/g, '').trim() || "What did you say?";
+  // Clean text: strip markdown artifacts and dangerous shell chars
+  const cleanEnglish = text
+    .replace(/[*_~\[\]`#>]/g, '')
+    .replace(/\n+/g, ' ')
+    .trim()
+    .slice(0, 500) || "What did you say?";
+
   if (cleanEnglish.length === 0) return "";
 
-  // Assign incredibly realistic Neural USA voices
-  // Christopher is a warm, deep wellness male speaker
-  // Aria is a soothing, clear female speaker
+  // Christopher = warm male wellness voice; Aria = soothing female voice
   const voiceId = twin === 'max' ? 'en-US-ChristopherNeural' : 'en-US-AriaNeural';
 
-  try {
-    // Generate the audio securely 100% free using Edge's WebSocket Neural Engine
-    // Requires python edge-tts pip package installed globally
-    const command = `python -m edge_tts --voice ${voiceId} --text "${cleanEnglish}" --write-media "${outputPath}"`;
-    await execAsync(command);
-    
-    return outputPath;
-  } catch (err) {
-    console.error(`Failed to generate Neural voice (make sure 'pip install edge-tts' is run):`, err);
-    throw err;
+  // Try python3 first (Linux/Railway), fall back to python (Windows)
+  const pythonBins = process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python'];
+
+  let lastErr: unknown;
+  for (const pythonBin of pythonBins) {
+    try {
+      await execFileAsync(pythonBin, [
+        '-m', 'edge_tts',
+        '--voice', voiceId,
+        '--text', cleanEnglish,
+        '--write-media', outputPath,
+      ], { timeout: 30000 });
+
+      // Verify the file was actually created
+      if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+        return outputPath;
+      }
+    } catch (err) {
+      lastErr = err;
+      // Try the next python binary
+    }
   }
+
+  console.error('Failed to generate Neural voice with any Python binary:', lastErr);
+  throw lastErr;
 }
