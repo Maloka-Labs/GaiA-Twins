@@ -83,7 +83,14 @@ export class TelegramChannel implements Channel {
         `  Ashtanga • Inversions • Energy Healing\n\n` +
         `Switch twins anytime: /max or /melini\n` +
         `Just send a message to start chatting! 💨`,
-        { parse_mode: 'Markdown' },
+        { 
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "🌟 Open Mini App", web_app: { url: process.env.WEBAPP_URL || "https://nanoclaw.dev" } }]
+            ]
+          }
+        },
       );
     });
 
@@ -329,22 +336,25 @@ export class TelegramChannel implements Channel {
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
-        // Resolve twin identity for voice clone
-        const isMelini = text.toLowerCase().includes('inversions') || text.toLowerCase().includes('ashtanga');
-        const twinIdentity = isMelini ? 'melini' : 'max';
+        // Resolve twin identity from registered group folder (not text heuristic)
+        const group = this.opts.registeredGroups()[jid];
+        const twinIdentity: 'max' | 'melini' = 
+          group?.folder === 'meliniseri' ? 'melini' : 'max';
 
         try {
-            const audioClonado = await generateEnglishVoice(twinIdentity, text);
-            if (audioClonado && fs.existsSync(audioClonado)) {
-                await this.bot!.api.sendVoice(numericId, new InputFile(audioClonado), {
-                    caption: text
+            const audioPath = await generateEnglishVoice(twinIdentity, text);
+            if (audioPath && fs.existsSync(audioPath)) {
+                // Telegram voice caption limit is 1024 chars
+                const caption = text.length > 1024 ? text.slice(0, 1021) + '...' : text;
+                await this.bot!.api.sendVoice(numericId, new InputFile(audioPath), {
+                    caption
                 });
-                fs.unlinkSync(audioClonado);
+                fs.unlinkSync(audioPath);
             } else {
                 await this.bot!.api.sendMessage(numericId, text);
             }
         } catch (err) {
-            logger.error({ err, jid }, 'Failed to generate XTTS voice, falling back to text');
+            logger.error({ err, jid, twin: twinIdentity }, 'Voice generation failed, sending text');
             await this.bot!.api.sendMessage(numericId, text);
         }
       } else {
