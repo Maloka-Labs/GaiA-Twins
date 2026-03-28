@@ -25,7 +25,9 @@ export async function generateEnglishVoice(twin: 'max' | 'melini', text: string)
   if (cleanEnglish.length === 0) return "";
 
   // ── STRATEGY 1: Try Gradio XTTS voice cloning ──
-  const xttsSpace = process.env.XTTS_GRADIO_SPACE;
+  // Using a community XTTS space as default if NOT provided in .env
+  const xttsSpace = process.env.XTTS_GRADIO_SPACE || "coqui/xtts"; 
+  
   if (xttsSpace) {
     try {
       const referenceAudio = path.join(
@@ -35,22 +37,29 @@ export async function generateEnglishVoice(twin: 'max' | 'melini', text: string)
       
       if (fs.existsSync(referenceAudio)) {
         logger.info({ twin, space: xttsSpace }, 'Attempting XTTS voice clone');
+        // Dynamic import to avoid issues on systems without @gradio/client
         const { Client } = await import('@gradio/client');
         const app = await Client.connect(xttsSpace);
         
         const result = await app.predict('/predict', [
-          cleanEnglish,
-          "en",
-          fs.readFileSync(referenceAudio)
+          cleanEnglish, // text
+          "en",         // language
+          fs.readFileSync(referenceAudio), // reference audio file
+          null,         // microphone (not used)
+          false,        // use mic (false)
+          true,         // cleanup (true)
+          0,            // no-cloning (0)
         ]);
         
         if (result?.data?.[0]?.url) {
           const response = await fetch(result.data[0].url);
           const buffer = await response.arrayBuffer();
           fs.writeFileSync(outputPath, Buffer.from(buffer));
-          logger.info({ twin }, 'XTTS clone voice generated successfully');
+          logger.info({ twin }, 'XTTS clone voice generated successfully from ' + referenceAudio);
           return outputPath;
         }
+      } else {
+        logger.warn({ referenceAudio }, 'Voice reference file missing, skipping XTTS clone');
       }
     } catch (err) {
       logger.warn({ twin, err }, 'XTTS clone failed, falling back to Edge-TTS');
@@ -58,15 +67,13 @@ export async function generateEnglishVoice(twin: 'max' | 'melini', text: string)
   }
 
   // ── STRATEGY 2: Edge-TTS (reliable fallback) ──
-  // These are Microsoft's best natural-sounding neural voices:
   // Guy = warm male conversational; Jenny = warm female conversational
   const voiceId = twin === 'max' 
-    ? 'en-US-GuyNeural'      // More natural than Christopher
-    : 'en-US-JennyNeural';   // More natural than Aria
+    ? 'en-US-GuyNeural'      
+    : 'en-US-JennyNeural';   
   
-  // SSML prosody to sound more human: slightly slower, natural pitch
-  const ssmlRate = '-5%';
-  const ssmlPitch = twin === 'max' ? '-2Hz' : '+0Hz';
+  const ssmlRate = '-2%'; // Slightly faster than before for better energy
+  const ssmlPitch = twin === 'max' ? '-1Hz' : '+0Hz';
 
   const pythonBins = process.platform === 'win32' 
     ? ['python', 'python3', 'py'] 

@@ -171,6 +171,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const prompt = formatMessages(missedMessages);
+  
+  // High-priority instruction to ensure Gemini sticks to the Persona Plex (English only, natural voice)
+  const assistantTwinName = group.folder === 'meliniseri' ? 'Melini Jesudason' : 'Max Lowenstein';
+  const finalPrompt = `${prompt}\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${assistantTwinName}. Talk exactly how a person speaks in a casual voice note. Respond ONLY in 100% native American English. No Spanish, No Spanglish. Keep it under 3 sentences.]`;
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -201,7 +205,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const combinedMedia = missedMessages.flatMap(m => m.media || []);
 
-  const output = await runAgent(group, prompt, chatJid, combinedMedia.length > 0 ? combinedMedia : undefined, async (result) => {
+  const output = await runAgent(group, finalPrompt, chatJid, combinedMedia.length > 0 ? combinedMedia : undefined, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
