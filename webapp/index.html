@@ -1030,8 +1030,9 @@
         const avg = sum / data.length;
         
         const now = Date.now();
-        // 10 is a general volume noise floor, adjust if needed
-        if (avg > 15) {
+        // 25 is a more robust floor for mobile background noise
+        if (avg > 25) {
+          console.log('Voice detected, volume:', avg);
           silenceStart = 0;
           if (!speakingStart) speakingStart = now;
           

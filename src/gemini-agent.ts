@@ -84,7 +84,7 @@ export async function runGeminiAgent(
     // Read API key from environment or .env file
     const envConfig = readEnvFile(['GEMINI_API_KEY', 'LLM_MODEL']);
     const apiKey = process.env.GEMINI_API_KEY || envConfig.GEMINI_API_KEY;
-    const model = process.env.LLM_MODEL || envConfig.LLM_MODEL || 'gemini-2.5-flash';
+    const model = process.env.LLM_MODEL || envConfig.LLM_MODEL || 'gemini-1.5-flash';
 
     if (!apiKey) {
         logger.error('GEMINI_API_KEY not configured');

@@ -707,10 +707,10 @@ function startWebServer(): void {
              }));
           }
 
-        } catch (err) {
-          logger.error({ err }, 'Voice endpoint error');
+        } catch (err: any) {
+          logger.error({ err, audioSize: body.length }, 'Voice endpoint fatal error');
           res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Internal server error' }));
+          res.end(JSON.stringify({ error: err?.message || 'Internal server error' }));
         }
       });
       return;
