@@ -1030,8 +1030,8 @@
         const avg = sum / data.length;
         
         const now = Date.now();
-        // 25 is a more robust floor for mobile background noise
-        if (avg > 25) {
+        // 15 is standard for laptop/mobile balance
+        if (avg > 15) {
           console.log('Voice detected, volume:', avg);
           silenceStart = 0;
           if (!speakingStart) speakingStart = now;

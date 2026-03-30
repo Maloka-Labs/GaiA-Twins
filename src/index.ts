@@ -174,7 +174,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   
   // High-priority instruction to ensure Gemini sticks to the Persona Plex (English only, natural voice)
   const assistantTwinName = group.folder === 'meliniseri' ? 'Melini Jesudason' : 'Max Lowenstein';
-  const finalPrompt = `${prompt}\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${assistantTwinName}. Talk exactly how a person speaks in a casual voice note. Respond ONLY in 100% native American English. No Spanish, No Spanglish. Keep it under 3 sentences.]`;
+  const finalPrompt = `${prompt}\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${assistantTwinName}. Respond ONLY in 100% native American English. No Spanish, No Spanglish. Keep it under 2 sentences for the best voice experience. Talk exactly how a person speaks in a quick voice note.]`;
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -205,28 +205,39 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const combinedMedia = missedMessages.flatMap(m => m.media || []);
 
-  const output = await runAgent(group, finalPrompt, chatJid, combinedMedia.length > 0 ? combinedMedia : undefined, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+  const env = readEnvFile(['LLM_PROVIDER']);
+  const provider = process.env.LLM_PROVIDER || env.LLM_PROVIDER || 'gemini';
+
+  const runAgentFn = provider === 'groq' 
+    ? (await import('./groq-agent.js')).runGroqAgent 
+    : runGeminiAgent;
+
+  const output = await runAgentFn({
+    prompt: finalPrompt,
+    groupFolder: group.folder,
+    chatJid,
+    media: combinedMedia.length > 0 ? combinedMedia : undefined,
+  }).then(async (result: any) => {
+    // Standardize result treatment
+    if (result.status === 'success' && result.result) {
+      const raw = result.result;
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
+      logger.info({ provider, group: group.name }, `Agent output: ${text.slice(0, 100)}...`);
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
-    }
-
-    if (result.status === 'success') {
       queue.notifyIdle(chatJid);
-    }
-
-    if (result.status === 'error') {
+      return 'success';
+    } else {
       hadError = true;
+      return 'error';
     }
+  }).catch(err => {
+    logger.error({ err, provider }, 'Agent execution failed');
+    hadError = true;
+    return 'error';
   });
 
   await channel.setTyping?.(chatJid, false);
@@ -732,8 +743,8 @@ function startWebServer(): void {
     res.end(html);
   });
 
-  server.listen(port, () => {
-    logger.info({ port }, `Mini App web server listening on port ${port}`);
+  server.listen(port, '0.0.0.0', () => {
+    logger.info({ port }, `Mini App web server listening on port ${port} (0.0.0.0)`);
   });
 }
 

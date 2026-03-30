@@ -330,45 +330,43 @@ export class TelegramChannel implements Channel {
       return;
     }
 
+    const numericId = jid.replace(/^tg:/, '');
+    const MAX_TELEGRAM_CAPTION = 1024;
+
+    // Determine twin identity
+    const group = this.opts.registeredGroups()[jid];
+    const twinIdentity: 'max' | 'melini' = 
+      group?.folder === 'meliniseri' ? 'melini' : 'max';
+
     try {
-      const numericId = jid.replace(/^tg:/, '');
-
-      // Telegram has a 4096 character limit per message — split if needed
-      const MAX_LENGTH = 4096;
-      if (text.length <= MAX_LENGTH) {
-        // Resolve twin identity from registered group folder (not text heuristic)
-        const group = this.opts.registeredGroups()[jid];
-        const twinIdentity: 'max' | 'melini' = 
-          group?.folder === 'meliniseri' ? 'melini' : 'max';
-
-        try {
-            const audioPath = await generateEnglishVoice(twinIdentity, text);
-            if (audioPath && fs.existsSync(audioPath)) {
-                // Telegram voice caption limit is 1024 chars
-                const caption = text.length > 1024 ? text.slice(0, 1021) + '...' : text;
-                await this.bot!.api.sendVoice(numericId, new InputFile(audioPath), {
-                    caption
-                });
-                fs.unlinkSync(audioPath);
-            } else {
-                await this.bot!.api.sendMessage(numericId, text);
-            }
-        } catch (err) {
-            logger.error({ err, jid, twin: twinIdentity }, 'Voice generation failed, sending text');
+        // Attempt to generate voice for Telegram
+        const audioPath = await generateEnglishVoice(twinIdentity, text);
+        
+        if (audioPath && fs.existsSync(audioPath)) {
+            // Telegram voice caption limit is 1024 chars
+            const caption = text.length > MAX_TELEGRAM_CAPTION 
+              ? text.slice(0, MAX_TELEGRAM_CAPTION - 3) + '...' 
+              : text;
+            
+            await this.bot!.api.sendVoice(numericId, new InputFile(audioPath), {
+                caption
+            });
+            
+            if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
+            logger.info({ jid, twin: twinIdentity }, 'Voice message sent to Telegram');
+        } else {
+            // Fallback to text if voice generation returned no path
             await this.bot!.api.sendMessage(numericId, text);
         }
-      } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await this.bot.api.sendMessage(
-            numericId,
-            text.slice(i, i + MAX_LENGTH),
-          );
-        }
-      }
-      logger.info({ jid, length: text.length }, 'Telegram message sent');
     } catch (err) {
-      logger.error({ jid, err }, 'Failed to send Telegram message');
+        logger.error({ err, jid, twin: twinIdentity }, 'Voice generation failed, sending text as fallback');
+        // Split if too long for a single message
+        const MAX_LENGTH = 4096;
+        for (let i = 0; i < text.length; i += MAX_LENGTH) {
+          await this.bot!.api.sendMessage(numericId, text.slice(i, i + MAX_LENGTH));
+        }
     }
+    logger.info({ jid, length: text.length }, 'Telegram message sent');
   }
 
   isConnected(): boolean {
