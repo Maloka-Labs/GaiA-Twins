@@ -77,9 +77,45 @@ export async function runGroqAgent(input: {
     ? fullPersonaPlex + "\n\nCRITICAL CONTEXT:\n" + systemMatch[1].trim()
     : fullPersonaPlex;
 
-  const userContent = systemMatch
+  let userContent = systemMatch
     ? input.prompt.replace(/\[SYSTEM INSTRUCTION:[\s\S]*?\]$/, '').trim()
     : input.prompt;
+
+  // ── HANDLE AUDIO MEDIA WITH GROQ WHISPER ──
+  if (input.media && input.media.some(m => m.type === 'audio' || m.mimeType.startsWith('audio/'))) {
+    const audioMedia = input.media.find(m => m.type === 'audio' || m.mimeType.startsWith('audio/'));
+    if (audioMedia && apiKey) {
+      try {
+        logger.info('Transcribing incoming audio media via Groq Whisper');
+        const audioBuffer = Buffer.from(audioMedia.data, 'base64');
+        const cleanMimeType = audioMedia.mimeType.split(';')[0].trim();
+        const extension = cleanMimeType.split('/')[1] || 'webm';
+        
+        const formData = new FormData();
+        const audioBlob = new Blob([audioBuffer], { type: cleanMimeType });
+        formData.append('file', audioBlob, `audio.${extension}`);
+        formData.append('model', 'whisper-large-v3');
+        formData.append('language', 'en');
+
+        const transcribeRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+          body: formData,
+        });
+
+        if (transcribeRes.ok) {
+          const transcribeData = await transcribeRes.json() as any;
+          const transcribedText = transcribeData?.text || '';
+          logger.info({ transcribedText }, 'Whisper transcription successful');
+          userContent = userContent + `\n\n[USER SENT A VOICE NOTE. Transcription: "${transcribedText}"]`;
+        } else {
+          logger.warn('Whisper transcription failed for incoming media');
+        }
+      } catch (err) {
+        logger.error({ err }, 'Error transcribing media in Groq agent');
+      }
+    }
+  }
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
