@@ -82,6 +82,7 @@ export async function generateEnglishVoice(twin: 'max' | 'melini', text: string)
   let lastErr: unknown;
   for (const pythonBin of pythonBins) {
     try {
+      logger.info({ pythonBin, twin }, 'Trying Edge-TTS with python binary');
       await execFileAsync(pythonBin, [
         '-m', 'edge_tts',
         '--voice', voiceId,
@@ -96,8 +97,51 @@ export async function generateEnglishVoice(twin: 'max' | 'melini', text: string)
         return outputPath;
       }
     } catch (err) {
+      logger.warn({ pythonBin, err }, 'Edge-TTS failed with this Python binary');
       lastErr = err;
     }
+  }
+
+  // ── STRATEGY 3: Google Translate TTS (pure HTTP, no Python, always works) ──
+  logger.warn({ twin }, 'Edge-TTS failed completely, trying Google Translate TTS fallback');
+  try {
+    // Split text into chunks of ~180 chars to stay within Google TTS limit
+    const chunks = [];
+    const words = cleanEnglish.split(' ');
+    let current = '';
+    for (const word of words) {
+      if ((current + ' ' + word).length > 180) {
+        if (current) chunks.push(current.trim());
+        current = word;
+      } else {
+        current += ' ' + word;
+      }
+    }
+    if (current.trim()) chunks.push(current.trim());
+
+    // Download each chunk and concatenate
+    const audioChunks: Buffer[] = [];
+    for (const chunk of chunks) {
+      const encodedText = encodeURIComponent(chunk);
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodedText}`;
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+      if (res.ok) {
+        const buf = Buffer.from(await res.arrayBuffer());
+        audioChunks.push(buf);
+      }
+    }
+
+    if (audioChunks.length > 0) {
+      fs.writeFileSync(outputPath, Buffer.concat(audioChunks));
+      if (fs.statSync(outputPath).size > 0) {
+        logger.info({ twin, chunks: chunks.length }, 'Google TTS fallback generated successfully');
+        return outputPath;
+      }
+    }
+  } catch (gttsErr) {
+    logger.error({ gttsErr }, 'Google TTS fallback also failed');
   }
 
   logger.error({ lastErr }, 'All voice generation methods failed');
