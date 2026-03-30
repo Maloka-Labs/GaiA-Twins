@@ -1,4 +1,4 @@
-import fs from 'fs';
+-----------------------------------------------import fs from 'fs';
 import path from 'path';
 import type { FileOperation, FileOpsResult } from './types.js';
 
@@ -119,7 +119,7 @@ export function executeFileOps(
       case 'delete': {
         if (!op.path) {
           result.errors.push(`delete: requires 'path'`);
-          result.success = false;
+          result.success = false;-----
           return result;
         }
         const delPath = safePath(root, op.path);

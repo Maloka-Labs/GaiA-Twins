@@ -209,19 +209,50 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const provider = process.env.LLM_PROVIDER || 'gemini';
 
-  const runAgentFn = provider === 'groq' ? runGroqAgent : runGeminiAgent;
+  // Run primary agent, with automatic Gemini fallback if Groq hits rate limit
+  const runPrimaryAgent = provider === 'groq' ? runGroqAgent : runGeminiAgent;
 
-  const output = await runAgentFn({
-    prompt: finalPrompt,
-    groupFolder: group.folder,
-    chatJid,
-    media: combinedMedia.length > 0 ? combinedMedia : undefined,
-  }).then(async (result: any) => {
-    // Standardize result treatment
-    if (result.status === 'success' && result.result) {
-      const raw = result.result;
+  const tryAgent = async (agentFn: (input: any) => Promise<any>, agentName: string) => {
+    const result = await agentFn({
+      prompt: finalPrompt,
+      groupFolder: group.folder,
+      chatJid,
+      media: combinedMedia.length > 0 ? combinedMedia : undefined,
+    });
+    return { result, agentName };
+  };
+
+  let agentResult: any = null;
+  let usedAgent = provider;
+
+  try {
+    const { result } = await tryAgent(runPrimaryAgent, provider);
+    // If Groq hits rate limit, auto-fallback to Gemini
+    if (result.status === 'error' && provider === 'groq' && (result as any).error?.includes('rate_limit_exceeded')) {
+      logger.warn({ group: group.name }, 'Groq rate limit hit — falling back to Gemini');
+      const fallback = await tryAgent(runGeminiAgent, 'gemini');
+      agentResult = fallback.result;
+      usedAgent = 'gemini';
+    } else {
+      agentResult = result;
+    }
+  } catch (err: any) {
+    logger.error({ err, provider }, 'Primary agent failed, trying Gemini fallback');
+    try {
+      const fallback = await tryAgent(runGeminiAgent, 'gemini');
+      agentResult = fallback.result;
+      usedAgent = 'gemini';
+    } catch (fallbackErr) {
+      logger.error({ fallbackErr }, 'All agents failed');
+      agentResult = { status: 'error', result: null };
+    }
+  }
+
+  const output = await (async () => {
+    if (agentResult?.status === 'success' && agentResult.result) {
+      const raw = agentResult.result;
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ provider, group: group.name }, `Agent output: ${text.slice(0, 100)}...`);
+      logger.info({ provider: usedAgent, group: group.name }, `Agent output: ${text.slice(0, 100)}...`);
       if (text) {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
@@ -233,11 +264,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       hadError = true;
       return 'error';
     }
-  }).catch((err: any) => {
-    logger.error({ err, provider }, 'Agent execution failed');
-    hadError = true;
-    return 'error';
-  });
+  })();
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -710,17 +737,25 @@ function startWebServer(): void {
               transcribedText = '';
             }
 
-            // Step 2: Generate text response with Groq Llama
+            // Step 2: Generate text response — Groq primary, Gemini fallback
             const userMessage = transcribedText 
               ? `User said: "${transcribedText}"` 
               : '[User sent a voice message but transcription failed. Respond with a friendly greeting and ask them to try again.]';
             
-            result = await runGroqAgent({
-              prompt: `${memoryContext}${ragContext}${userMessage}\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${twinName}. Respond ONLY in 100% native American English. Keep it under 2 sentences. Talk exactly how a person speaks in a quick voice note.]`,
-              groupFolder,
-              chatJid: chatJidVoice,
-              assistantName: twinName,
-            }) as any;
+            const voicePrompt = `${memoryContext}${ragContext}${userMessage}\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${twinName}. Respond ONLY in 100% native American English. Keep it under 2 sentences. Talk exactly how a person speaks in a quick voice note.]`;
+
+            result = await runGroqAgent({ prompt: voicePrompt, groupFolder, chatJid: chatJidVoice, assistantName: twinName }) as any;
+
+            // Auto-fallback to Gemini if Groq hits rate limit
+            if (result.status === 'error' && ((result as any).error?.includes('rate_limit_exceeded') || (result as any).error?.includes('Rate limit'))) {
+              logger.warn({ twin }, 'Groq rate limit in /voice — falling back to Gemini');
+              result = await runGeminiAgent({
+                prompt: `${memoryContext}${ragContext}${userMessage}\n\nRespond naturally and conversationally as ${twinName}. Use 100% English. Keep it under 2 sentences.`,
+                groupFolder,
+                chatJid: chatJidVoice,
+                assistantName: twinName,
+              }) as any;
+            }
 
           } else {
             // ── GEMINI PIPELINE: Direct multimodal audio input ──
@@ -736,7 +771,7 @@ function startWebServer(): void {
 
           const responseText = result.status === 'success' && result.result
             ? result.result
-            : 'Hey, I think I missed that one — could you say it again?';
+            : 'Just a moment — my connection is a bit slow right now. Could you say that again?';
 
           // Save assistant response to memory (fire-and-forget)
           saveMemory(chatJidVoice, twin, 'assistant', responseText).catch(() => {});
