@@ -48,12 +48,14 @@ import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { runGeminiAgent } from './gemini-agent.js';
+import { runGroqAgent } from './groq-agent.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 import { saveMemory, loadMemory } from './memory.js';
 import { searchKnowledge, seedTwinKnowledge } from './rag.js';
 import { syncInstagramPersona } from './rag/instagram-miner.js';
 import { MediaPart } from './gemini-agent.js';
+import { readEnvFile } from './env.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -205,12 +207,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const combinedMedia = missedMessages.flatMap(m => m.media || []);
 
-  const env = readEnvFile(['LLM_PROVIDER']);
-  const provider = process.env.LLM_PROVIDER || env.LLM_PROVIDER || 'gemini';
+  const provider = process.env.LLM_PROVIDER || 'gemini';
 
-  const runAgentFn = provider === 'groq' 
-    ? (await import('./groq-agent.js')).runGroqAgent 
-    : runGeminiAgent;
+  const runAgentFn = provider === 'groq' ? runGroqAgent : runGeminiAgent;
 
   const output = await runAgentFn({
     prompt: finalPrompt,
@@ -234,7 +233,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       hadError = true;
       return 'error';
     }
-  }).catch(err => {
+  }).catch((err: any) => {
     logger.error({ err, provider }, 'Agent execution failed');
     hadError = true;
     return 'error';
