@@ -1142,8 +1142,11 @@
       try {
         if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
 
-        const buffer = await audioBlob.arrayBuffer();
-        const base64 = btoa(new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+        const base64 = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result.split(',')[1]);
+          reader.readAsDataURL(audioBlob);
+        });
 
         const response = await fetch(VOICE_API, {
           method: 'POST',
