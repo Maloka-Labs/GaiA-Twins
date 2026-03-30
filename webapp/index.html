@@ -981,8 +981,8 @@
     document.querySelector('.quote-author').style.transition = 'opacity 0.4s ease';
 
     // ===== COMPLETE VOICE PIPELINE =====
-    // Backend URL — always same origin (Railway serves both the webapp and the /voice endpoint)
-    const VOICE_API = '/voice';
+    // Backend URL — using full origin to avoid Android WebView path resolution issues
+    const VOICE_API = window.location.origin + '/voice';
 
     let mediaStream = null;
     let audioContext = null;
