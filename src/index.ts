@@ -684,9 +684,13 @@ function startWebServer(): void {
             
             // Step 1: Transcribe audio using Groq Whisper
             const audioBuffer = Buffer.from(audioBase64, 'base64');
+            let extension = cleanMimeType.split('/')[1] || 'webm';
+            if (extension === 'mp4') extension = 'm4a'; // Fix for iOS Safari Whisper bug
+            if (extension === 'ogg' || extension === 'oga') extension = 'ogg';
+
             const formData = new FormData();
             const audioBlob = new Blob([audioBuffer], { type: cleanMimeType });
-            formData.append('file', audioBlob, `audio.${cleanMimeType.split('/')[1] || 'webm'}`);
+            formData.append('file', audioBlob, `audio.${extension}`);
             formData.append('model', 'whisper-large-v3');
             formData.append('language', 'en');
 
@@ -699,10 +703,10 @@ function startWebServer(): void {
             if (transcribeRes.ok) {
               const transcribeData = await transcribeRes.json() as any;
               transcribedText = transcribeData?.text || '';
-              logger.info({ twin, transcribedText }, 'Groq Whisper transcription complete');
+              logger.info({ twin, transcribedText, extension }, 'Groq Whisper transcription complete');
             } else {
               const errText = await transcribeRes.text();
-              logger.warn({ errText }, 'Groq Whisper failed, using fallback prompt');
+              logger.error({ errText, extension, mime: cleanMimeType }, 'WhatsApp/Web Groq Whisper API ERROR');
               transcribedText = '';
             }
 

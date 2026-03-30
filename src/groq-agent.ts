@@ -89,7 +89,9 @@ export async function runGroqAgent(input: {
         logger.info('Transcribing incoming audio media via Groq Whisper');
         const audioBuffer = Buffer.from(audioMedia.data, 'base64');
         const cleanMimeType = audioMedia.mimeType.split(';')[0].trim();
-        const extension = cleanMimeType.split('/')[1] || 'webm';
+        let extension = cleanMimeType.split('/')[1] || 'webm';
+        if (extension === 'mp4') extension = 'm4a'; // Important for Whisper
+        if (extension === 'oga' || extension === 'ogg') extension = 'ogg';
         
         const formData = new FormData();
         const audioBlob = new Blob([audioBuffer], { type: cleanMimeType });
