@@ -1095,7 +1095,7 @@
       const info = TWINS[twin];
       document.getElementById('callStatus').textContent = `${info.avatar} Speaking...`;
 
-      // Show transcript
+      // Show transcript — this is the GUARANTEED way the user sees the response
       let transcriptEl = document.getElementById('callTranscript');
       if (!transcriptEl) {
         transcriptEl = document.createElement('div');
@@ -1109,44 +1109,90 @@
       }
       transcriptEl.textContent = `"${text}"`;
 
-      // Play High Quality Neural Audio if available
+      const resetToListening = () => {
+        document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
+      };
+
+      // Strategy 1: Play server-generated audio (Edge-TTS mp3)
       if (audioBase64) {
-        window.speechSynthesis.cancel();
+        try {
+          if (window.speechSynthesis) window.speechSynthesis.cancel();
+        } catch(e) {}
         const audio = new Audio(`data:audio/mp3;base64,${audioBase64}`);
-        audio.onended = () => {
-          document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
+        audio.onended = resetToListening;
+        audio.onerror = (e) => {
+          console.warn('Audio playback failed, showing text only', e);
+          resetToListening();
         };
         audio.play().catch(e => {
-          console.error('Audio playback failed', e);
-          document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
+          console.warn('Audio play() rejected:', e);
+          // On mobile/Telegram WebView, autoplay may be blocked — that's OK, text is visible
+          resetToListening();
         });
         return;
       }
 
-      // Fallback to robotic browser Web Speech API
-      window.speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.rate = 0.92;
-      utt.pitch = info.voiceGender === 'female' ? 1.1 : 0.9;
-      utt.volume = 1;
-      const voice = pickVoice(info.voiceGender);
-      if (voice) utt.voice = voice;
-      utt.onend = () => {
-        document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
-      };
-      window.speechSynthesis.speak(utt);
+      // Strategy 2: Try browser speechSynthesis (works on laptop, NOT on Telegram WebView)
+      if (window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined') {
+        try {
+          window.speechSynthesis.cancel();
+          const utt = new SpeechSynthesisUtterance(text);
+          utt.rate = 0.92;
+          utt.pitch = info.voiceGender === 'female' ? 1.1 : 0.9;
+          utt.volume = 1;
+          const voice = pickVoice(info.voiceGender);
+          if (voice) utt.voice = voice;
+          utt.onend = resetToListening;
+          utt.onerror = resetToListening;
+          window.speechSynthesis.speak(utt);
+          return;
+        } catch(e) {
+          console.warn('speechSynthesis not available:', e);
+        }
+      }
+
+      // Strategy 3: No audio available at all — just show text (Telegram WebView fallback)
+      setTimeout(resetToListening, 3000);
     }
 
     async function sendAudioToBackend(audioBlob, twin) {
       document.getElementById('callStatus').textContent = '⏳ Thinking...';
+
+      // Debug: show blob info
+      console.log('Audio blob:', { size: audioBlob.size, type: audioBlob.type });
+
+      if (!audioBlob || audioBlob.size < 100) {
+        document.getElementById('callStatus').textContent = '⚠️ Mic recorded empty audio. Try again.';
+        setTimeout(() => {
+          document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
+        }, 3000);
+        return;
+      }
+
       try {
         if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
 
-        const base64 = await new Promise((resolve) => {
+        const base64 = await new Promise((resolve, reject) => {
           const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result.split(',')[1]);
+          reader.onloadend = () => {
+            const result = reader.result;
+            if (!result || typeof result !== 'string') {
+              reject(new Error('FileReader returned empty'));
+              return;
+            }
+            const b64 = result.split(',')[1];
+            if (!b64 || b64.length < 50) {
+              reject(new Error(`Base64 too small: ${b64?.length || 0} chars`));
+              return;
+            }
+            resolve(b64);
+          };
+          reader.onerror = () => reject(new Error('FileReader error'));
           reader.readAsDataURL(audioBlob);
         });
+
+        console.log('Sending to server, base64 length:', base64.length);
+        document.getElementById('callStatus').textContent = '⏳ Sending to AI...';
 
         const response = await fetch(VOICE_API, {
           method: 'POST',
@@ -1158,21 +1204,28 @@
           }),
         });
 
+        console.log('Server response status:', response.status);
+
         if (!response.ok) {
            const errData = await response.json().catch(() => ({}));
-           throw new Error(errData.error || `Server error ${response.status}`);
+           throw new Error(errData.error || `Server ${response.status}`);
         }
         
         const data = await response.json();
-        if (data.text || data.ttsAudioBase64) {
-          speakResponse(data.text || 'Error: No text', twin, data.ttsAudioBase64);
+        console.log('Server data:', { hasText: !!data.text, hasAudio: !!data.ttsAudioBase64, textLen: data.text?.length });
+
+        if (data.text) {
+          speakResponse(data.text, twin, data.ttsAudioBase64);
         } else {
-          throw new Error('No text returned from AI');
+          throw new Error('Server returned no text');
         }
       } catch (err) {
         console.error('Voice API error:', err);
-        document.getElementById('callStatus').textContent = '⚠️ ' + (err.message || 'System busy');
-        speakResponse('Sorry, I couldn\'t hear you clearly. Could you repeat that?', twin);
+        // Show the REAL error so we can debug
+        const errMsg = err.message || 'Unknown error';
+        document.getElementById('callStatus').textContent = '⚠️ Error: ' + errMsg;
+        // Show the error as spoken text too, so user knows what happened
+        speakResponse('I had a connection issue. Let me try again when you speak.', twin);
         if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
       }
     }
