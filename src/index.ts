@@ -671,25 +671,68 @@ function startWebServer(): void {
           // Save user message first (fire-and-forget)
           saveMemory(chatJidVoice, twin, 'user', '[Voice Message]').catch(() => {});
 
-          // Sanitize mimeType (Gemini API strictly rejects parameter suffixes like ;codecs=opus)
+          // Sanitize mimeType
           const cleanMimeType = (mimeType || 'audio/webm').split(';')[0].trim();
+          const voiceProvider = process.env.LLM_PROVIDER || 'gemini';
 
-          // Call Gemini with audio + persona
-          const result = await runGeminiAgent({
-            prompt: `${memoryContext}${ragContext}[Voice message from user] Please respond naturally and conversationally as ${twinName}. Keep your response under 3 sentences for a good voice experience.`,
-            groupFolder,
-            chatJid: chatJidVoice,
-            assistantName: twinName,
-            media: [{
-              type: 'audio',
-              mimeType: cleanMimeType,
-              data: audioBase64,
-            }],
-          });
+          let transcribedText = '';
+          let result: { status: string; result: string | null };
+
+          if (voiceProvider === 'groq') {
+            // ── GROQ PIPELINE: Whisper (transcription) → Llama (response) ──
+            logger.info({ twin }, 'Using Groq pipeline: Whisper + Llama 3.3');
+            
+            // Step 1: Transcribe audio using Groq Whisper
+            const audioBuffer = Buffer.from(audioBase64, 'base64');
+            const formData = new FormData();
+            const audioBlob = new Blob([audioBuffer], { type: cleanMimeType });
+            formData.append('file', audioBlob, `audio.${cleanMimeType.split('/')[1] || 'webm'}`);
+            formData.append('model', 'whisper-large-v3');
+            formData.append('language', 'en');
+
+            const transcribeRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
+              body: formData,
+            });
+
+            if (transcribeRes.ok) {
+              const transcribeData = await transcribeRes.json() as any;
+              transcribedText = transcribeData?.text || '';
+              logger.info({ twin, transcribedText }, 'Groq Whisper transcription complete');
+            } else {
+              const errText = await transcribeRes.text();
+              logger.warn({ errText }, 'Groq Whisper failed, using fallback prompt');
+              transcribedText = '';
+            }
+
+            // Step 2: Generate text response with Groq Llama
+            const userMessage = transcribedText 
+              ? `User said: "${transcribedText}"` 
+              : '[User sent a voice message but transcription failed. Respond with a friendly greeting and ask them to try again.]';
+            
+            result = await runGroqAgent({
+              prompt: `${memoryContext}${ragContext}${userMessage}\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${twinName}. Respond ONLY in 100% native American English. Keep it under 2 sentences. Talk exactly how a person speaks in a quick voice note.]`,
+              groupFolder,
+              chatJid: chatJidVoice,
+              assistantName: twinName,
+            }) as any;
+
+          } else {
+            // ── GEMINI PIPELINE: Direct multimodal audio input ──
+            logger.info({ twin }, 'Using Gemini multimodal pipeline');
+            result = await runGeminiAgent({
+              prompt: `${memoryContext}${ragContext}[Voice message from user] Please respond naturally and conversationally as ${twinName}. Keep your response under 3 sentences for a good voice experience.`,
+              groupFolder,
+              chatJid: chatJidVoice,
+              assistantName: twinName,
+              media: [{ type: 'audio', mimeType: cleanMimeType, data: audioBase64 }],
+            }) as any;
+          }
 
           const responseText = result.status === 'success' && result.result
             ? result.result
-            : 'Sorry, I couldn\'t hear you clearly. Could you repeat that?';
+            : 'Hey, I think I missed that one — could you say it again?';
 
           // Save assistant response to memory (fire-and-forget)
           saveMemory(chatJidVoice, twin, 'assistant', responseText).catch(() => {});
