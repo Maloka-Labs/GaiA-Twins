@@ -808,6 +808,64 @@ function startWebServer(): void {
       return;
     }
 
+    // ===== CHAT ENDPOINT (Text-Only) =====
+    // POST /chat { text: string, twin: 'max'|'melini' }
+    if (req.method === 'POST' && req.url === '/chat') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk.toString(); });
+      req.on('end', async () => {
+        try {
+          const { text, twin } = JSON.parse(body);
+          if (!text || !twin) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing text or twin' }));
+            return;
+          }
+
+          const groupFolder = twin === 'melini' ? 'meliniseri' : 'healingmotions';
+          const twinName = twin === 'melini' ? 'Melini Jesudason' : 'Max Lowenstein';
+          const chatJidChat = `chat:${twin}:user1`;
+
+          logger.info({ twin, textLength: text.length }, 'Chat request processing started');
+          
+          const [memoryContext, ragContext] = await Promise.all([
+            loadMemory(chatJidChat, twin).catch(e => { logger.warn({e}, 'Memory skip'); return ''; }),
+            searchKnowledge('Chat query processing', twin).catch(e => { logger.warn({e}, 'RAG skip'); return ''; }),
+          ]);
+
+          saveMemory(chatJidChat, twin, 'user', text).catch(() => {});
+
+          const provider = process.env.LLM_PROVIDER || 'gemini';
+          let result: { status: string; result: string | null };
+
+          const prompt = `${memoryContext}${ragContext}User said: "${text}"\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${twinName}. Respond ONLY in 100% native American English. Keep it concise.]`;
+
+          if (provider === 'groq') {
+            result = await runGroqAgent({ prompt, groupFolder, chatJid: chatJidChat, assistantName: twinName }) as any;
+            if (result.status === 'error' && ((result as any).error?.includes('rate_limit_exceeded') || (result as any).error?.includes('Rate limit'))) {
+              result = await runGeminiAgent({ prompt, groupFolder, chatJid: chatJidChat, assistantName: twinName }) as any;
+            }
+          } else {
+            result = await runGeminiAgent({ prompt, groupFolder, chatJid: chatJidChat, assistantName: twinName }) as any;
+          }
+
+          const responseText = result.status === 'success' && result.result
+            ? result.result
+            : 'Just a moment — my connection is a bit slow right now. Could you say that again?';
+
+          saveMemory(chatJidChat, twin, 'assistant', responseText).catch(() => {});
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'success', text: responseText }));
+        } catch (err: any) {
+          logger.error({ err }, 'Chat endpoint fatal error');
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err?.message || 'Internal server error' }));
+        }
+      });
+      return;
+    }
+
     // Serve webapp/index.html for everything else
     const filePath = path.join(webappDir, 'index.html');
     if (!fs.existsSync(filePath)) {
