@@ -81,7 +81,7 @@ Style guidelines:
 export async function runGeminiAgent(
     input: GeminiAgentInput,
 ): Promise<GeminiAgentOutput> {
-    // Read API key from environment or .env file
+    // Read API key strictly from environment FIRST (Railway), then fallback to file
     const envConfig = readEnvFile(['GEMINI_API_KEY', 'LLM_MODEL']);
     const apiKey = process.env.GEMINI_API_KEY || envConfig.GEMINI_API_KEY;
     const model = process.env.LLM_MODEL || envConfig.LLM_MODEL || 'gemini-3.1-flash';
@@ -257,7 +257,7 @@ export async function getGeminiEmbedding(text: string): Promise<number[] | null>
     const apiKey = process.env.GEMINI_API_KEY || envConfig.GEMINI_API_KEY;
 
     if (!apiKey) {
-        logger.error('GEMINI_API_KEY not configured for embeddings');
+        logger.warn('No GEMINI_API_KEY for embeddings');
         return null;
     }
 
