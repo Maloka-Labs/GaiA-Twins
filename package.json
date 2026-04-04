@@ -14,7 +14,11 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "setup": "tsx setup/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "ingest": "tsx scripts/ingest-rag.ts all",
+    "ingest:seed": "tsx scripts/ingest-rag.ts seed",
+    "ingest:youtube": "tsx scripts/ingest-rag.ts youtube",
+    "ingest:knowledge": "tsx scripts/ingest-rag.ts knowledge"
   },
   "dependencies": {
     "@gradio/client": "^2.1.0",
