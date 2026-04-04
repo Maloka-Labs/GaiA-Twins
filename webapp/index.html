@@ -1147,9 +1147,17 @@
       return null;
     }
 
-    // Speak text aloud and show it on screen — SINGLE INSTANCE ENFORCED
-    let activeAudioElement = null; // declared here for scope; reset by killActiveAudio
+    // ─── Kill any previous audio (iOS Safari fix) ───
+    function killActiveAudio() {
+      if (activeAudioElement) {
+        try { activeAudioElement.pause(); activeAudioElement.src = ''; } catch(e) {}
+        activeAudioElement = null;
+      }
+      try { window.speechSynthesis?.cancel(); } catch(e) {}
+      isSpeaking = false;
+    }
 
+    // Speak text aloud and show it on screen — SINGLE INSTANCE ENFORCED
     function speakResponse(text, twin, audioBase64) {
       const info = TWINS[twin];
 
@@ -1186,15 +1194,13 @@
         activeAudioElement = audio;
         audio.onended = onDone;
         audio.onerror = onDone;
-        // iOS: play() returns a Promise — rejection does NOT stop the audio from starting
-        // So we MUST return here and NEVER fall through to speechSynthesis
         audio.play().catch(() => {
           if (activeAudioElement === audio) onDone();
         });
-        return; // ← HARD STOP — do not run Strategy 2
+        return;
       }
 
-      // ─ Strategy 2: Browser speechSynthesis (desktop / Android without server audio) ─
+      // ─ Strategy 2: Browser speechSynthesis (desktop / Android) ─
       if (window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined') {
         try {
           window.speechSynthesis.cancel();
@@ -1215,17 +1221,6 @@
 
       // ─ Strategy 3: No audio — show text only ─
       setTimeout(onDone, 3000);
-    }
-
-    // ─── SPEAK RESPONSE — single-instance enforced ───
-    // Kill any previous audio before starting next one (iOS Safari fix)
-    function killActiveAudio() {
-      if (activeAudioElement) {
-        try { activeAudioElement.pause(); activeAudioElement.src = ''; } catch(e) {}
-        activeAudioElement = null;
-      }
-      try { window.speechSynthesis?.cancel(); } catch(e) {}
-      isSpeaking = false;
     }
 
     async function sendAudioToBackend(audioBlob, twin) {

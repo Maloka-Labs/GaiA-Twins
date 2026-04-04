@@ -173,7 +173,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const prompt = formatMessages(missedMessages);
-  
+
   // High-priority instruction to ensure Gemini sticks to the Persona Plex (English only, natural voice)
   const assistantTwinName = group.folder === 'meliniseri' ? 'Melini Jesudason' : 'Max Lowenstein';
   const finalPrompt = `${prompt}\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${assistantTwinName}. Respond ONLY in 100% native American English. No Spanish, No Spanglish. Keep it under 2 sentences for the best voice experience. Talk exactly how a person speaks in a quick voice note.]`;
@@ -538,13 +538,13 @@ async function main(): Promise<void> {
     try {
       const soulPath = path.resolve(process.cwd(), 'workspace', 'SOUL.md');
       const soulContent = fs.existsSync(soulPath) ? fs.readFileSync(soulPath, 'utf-8') : '';
-      
+
       const maxPath = path.join(GROUPS_DIR, 'healingmotions', 'SEED.md');
       if (fs.existsSync(maxPath)) await seedTwinKnowledge('max', soulContent + '\n\n' + fs.readFileSync(maxPath, 'utf-8'));
-      
+
       const meliniPath = path.join(GROUPS_DIR, 'meliniseri', 'SEED.md');
       if (fs.existsSync(meliniPath)) await seedTwinKnowledge('melini', soulContent + '\n\n' + fs.readFileSync(meliniPath, 'utf-8'));
-      
+
       // Sync IG Persona (PersonaPlex)
       await syncInstagramPersona('max');
       await syncInstagramPersona('melini');
@@ -686,17 +686,17 @@ function startWebServer(): void {
           const chatJidVoice = `voice:${twin}:user1`;
 
           logger.info({ twin, groupFolder, mimeType, audioSize: audioBase64.length }, 'Voice request processing started');
-          
+
           // Load context with a timeout so we don't hang if Supabase/Qdrant is slow
           const [memoryContext, ragContext] = await Promise.all([
-            loadMemory(chatJidVoice, twin).catch(e => { logger.warn({e}, 'Memory skip'); return ''; }),
-            searchKnowledge('Voice query processing', twin).catch(e => { logger.warn({e}, 'RAG skip'); return ''; }),
+            loadMemory(chatJidVoice, twin).catch(e => { logger.warn({ e }, 'Memory skip'); return ''; }),
+            searchKnowledge('Voice query processing', twin).catch(e => { logger.warn({ e }, 'RAG skip'); return ''; }),
           ]);
 
           logger.debug({ hasMemory: !!memoryContext, hasRag: !!ragContext }, 'Context loaded');
 
           // Save user message first (fire-and-forget)
-          saveMemory(chatJidVoice, twin, 'user', '[Voice Message]').catch(() => {});
+          saveMemory(chatJidVoice, twin, 'user', '[Voice Message]').catch(() => { });
 
           // Sanitize mimeType
           const cleanMimeType = (mimeType || 'audio/webm').split(';')[0].trim();
@@ -708,7 +708,7 @@ function startWebServer(): void {
           if (voiceProvider === 'groq') {
             // ── GROQ PIPELINE: Whisper (transcription) → Llama (response) ──
             logger.info({ twin }, 'Using Groq pipeline: Whisper + Llama 3.3');
-            
+
             // Step 1: Transcribe audio using Groq Whisper
             const audioBuffer = Buffer.from(audioBase64, 'base64');
             let extension = cleanMimeType.split('/')[1] || 'webm';
@@ -738,10 +738,10 @@ function startWebServer(): void {
             }
 
             // Step 2: Generate text response — Groq primary, Gemini fallback
-            const userMessage = transcribedText 
-              ? `User said: "${transcribedText}"` 
+            const userMessage = transcribedText
+              ? `User said: "${transcribedText}"`
               : '[User sent a voice message but transcription failed. Respond with a friendly greeting and ask them to try again.]';
-            
+
             const voicePrompt = `${memoryContext}${ragContext}${userMessage}\n\n[SYSTEM INSTRUCTION: Respond naturally and conversationally as ${twinName}. Respond ONLY in 100% native American English. Keep it under 2 sentences. Talk exactly how a person speaks in a quick voice note.]`;
 
             result = await runGroqAgent({ prompt: voicePrompt, groupFolder, chatJid: chatJidVoice, assistantName: twinName }) as any;
@@ -774,29 +774,29 @@ function startWebServer(): void {
             : 'Just a moment — my connection is a bit slow right now. Could you say that again?';
 
           // Save assistant response to memory (fire-and-forget)
-          saveMemory(chatJidVoice, twin, 'assistant', responseText).catch(() => {});
+          saveMemory(chatJidVoice, twin, 'assistant', responseText).catch(() => { });
 
           try {
-             const audioPath = await generateEnglishVoice(twin, responseText);
-             const audioBuffer = fs.readFileSync(audioPath);
-             const ttsAudioBase64 = audioBuffer.toString('base64');
-             
-             // Cleanup if needed
-             fs.unlinkSync(audioPath);
+            const audioPath = await generateEnglishVoice(twin, responseText);
+            const audioBuffer = fs.readFileSync(audioPath);
+            const ttsAudioBase64 = audioBuffer.toString('base64');
 
-             res.writeHead(200, { 'Content-Type': 'application/json' });
-             res.end(JSON.stringify({
-               status: 'success',
-               text: responseText,
-               ttsAudioBase64
-             }));
-          } catch(err) {
-             logger.error({err}, 'Edge TTS generation failed in webapp');
-             res.writeHead(200, { 'Content-Type': 'application/json' });
-             res.end(JSON.stringify({
-               status: 'success',
-               text: responseText
-             }));
+            // Cleanup if needed
+            fs.unlinkSync(audioPath);
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              status: 'success',
+              text: responseText,
+              ttsAudioBase64
+            }));
+          } catch (err) {
+            logger.error({ err }, 'Edge TTS generation failed in webapp');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              status: 'success',
+              text: responseText
+            }));
           }
 
         } catch (err: any) {
@@ -827,13 +827,13 @@ function startWebServer(): void {
           const chatJidChat = `chat:${twin}:user1`;
 
           logger.info({ twin, textLength: text.length }, 'Chat request processing started');
-          
+
           const [memoryContext, ragContext] = await Promise.all([
-            loadMemory(chatJidChat, twin).catch(e => { logger.warn({e}, 'Memory skip'); return ''; }),
-            searchKnowledge('Chat query processing', twin).catch(e => { logger.warn({e}, 'RAG skip'); return ''; }),
+            loadMemory(chatJidChat, twin).catch(e => { logger.warn({ e }, 'Memory skip'); return ''; }),
+            searchKnowledge('Chat query processing', twin).catch(e => { logger.warn({ e }, 'RAG skip'); return ''; }),
           ]);
 
-          saveMemory(chatJidChat, twin, 'user', text).catch(() => {});
+          saveMemory(chatJidChat, twin, 'user', text).catch(() => { });
 
           const provider = process.env.LLM_PROVIDER || 'gemini';
           let result: { status: string; result: string | null };
@@ -853,7 +853,7 @@ function startWebServer(): void {
             ? result.result
             : 'Just a moment — my connection is a bit slow right now. Could you say that again?';
 
-          saveMemory(chatJidChat, twin, 'assistant', responseText).catch(() => {});
+          saveMemory(chatJidChat, twin, 'assistant', responseText).catch(() => { });
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ status: 'success', text: responseText }));
