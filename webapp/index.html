@@ -1050,6 +1050,10 @@
     let currentTwin = null;
     let isRecording = false;
     let vadInterval = null;
+    // ─ MUTEX GLOBAL ─ prevents any overlap: recording, API call, or audio playback
+    let isBusy = false;      // true while: recording + processing + speaking
+    let isSpeaking = false;  // true only while audio is being played back
+    let activeAudioElement = null; // the currently playing HTMLAudioElement
 
     const TWINS = {
       max: { name: 'Max Lowenstein', avatar: '🧘‍♂️', cssClass: 'max-call', voiceGender: 'male' },
@@ -1074,9 +1078,8 @@
 
       vadInterval = setInterval(() => {
         if (!analyser) return;
-        const status = document.getElementById('callStatus').textContent;
-        // Do not listen while bot is thinking or speaking to prevent echo loops
-        if (status.includes('Thinking') || status.includes('Speaking')) return;
+        // MUTEX CHECK — never start recording while busy (recording/processing/speaking)
+        if (isBusy) { silenceStart = 0; speakingStart = 0; return; }
 
         const data = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteFrequencyData(data);
@@ -1085,7 +1088,6 @@
         const avg = sum / data.length;
 
         const now = Date.now();
-        // 15 is standard for laptop/mobile balance
         if (avg > 15) {
           console.log('Voice detected, volume:', avg);
           silenceStart = 0;
@@ -1145,21 +1147,19 @@
       return null;
     }
 
-    // Speak text aloud and show it on screen
-    let activeAudioElement = null; // Track globally to prevent overlapping playback
+    // Speak text aloud and show it on screen — SINGLE INSTANCE ENFORCED
+    let activeAudioElement = null; // declared here for scope; reset by killActiveAudio
 
     function speakResponse(text, twin, audioBase64) {
       const info = TWINS[twin];
+
+      // Kill any previously-playing audio first (the real iOS fix)
+      killActiveAudio();
+      isSpeaking = true;
+
       document.getElementById('callStatus').textContent = `${info.avatar} Speaking...`;
 
-      // FIRST: Kill any previously playing audio to prevent overlap
-      try { window.speechSynthesis?.cancel(); } catch(e) {}
-      if (activeAudioElement) {
-        try { activeAudioElement.pause(); activeAudioElement.src = ''; } catch(e) {}
-        activeAudioElement = null;
-      }
-
-      // Show transcript — this is the GUARANTEED way the user sees the response
+      // Show transcript
       let transcriptEl = document.getElementById('callTranscript');
       if (!transcriptEl) {
         transcriptEl = document.createElement('div');
@@ -1173,24 +1173,28 @@
       }
       transcriptEl.textContent = `"${text}"`;
 
-      const resetToListening = () => {
+      const onDone = () => {
+        isSpeaking = false;
+        isBusy = false; // ← RELEASE MUTEX: pipeline is now free again
+        activeAudioElement = null;
         document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
       };
 
-      // Strategy 1: Play server-generated audio (ElevenLabs/Edge-TTS mp3)
+      // ─ Strategy 1: ElevenLabs/Edge-TTS MP3 from server ─
       if (audioBase64) {
         const audio = new Audio(`data:audio/mp3;base64,${audioBase64}`);
         activeAudioElement = audio;
-        audio.onended = () => { activeAudioElement = null; resetToListening(); };
-        audio.onerror = () => { activeAudioElement = null; resetToListening(); };
-        audio.play().catch(() => { activeAudioElement = null; resetToListening(); });
-        // CRITICAL: Always return here. Do NOT fall through to speechSynthesis.
-        // This was the iPhone dual-voice bug — on iOS, play() rejects but audio
-        // still plays partially, then speechSynthesis also fires = two voices.
-        return;
+        audio.onended = onDone;
+        audio.onerror = onDone;
+        // iOS: play() returns a Promise — rejection does NOT stop the audio from starting
+        // So we MUST return here and NEVER fall through to speechSynthesis
+        audio.play().catch(() => {
+          if (activeAudioElement === audio) onDone();
+        });
+        return; // ← HARD STOP — do not run Strategy 2
       }
 
-      // Strategy 2: Browser speechSynthesis (desktop/Android only — NEVER on iPhone if Strategy 1 was attempted)
+      // ─ Strategy 2: Browser speechSynthesis (desktop / Android without server audio) ─
       if (window.speechSynthesis && typeof SpeechSynthesisUtterance !== 'undefined') {
         try {
           window.speechSynthesis.cancel();
@@ -1200,29 +1204,39 @@
           utt.volume = 1;
           const voice = pickVoice(info.voiceGender);
           if (voice) utt.voice = voice;
-          utt.onend = resetToListening;
-          utt.onerror = resetToListening;
+          utt.onend = onDone;
+          utt.onerror = onDone;
           window.speechSynthesis.speak(utt);
           return;
         } catch (e) {
-          console.warn('speechSynthesis not available:', e);
+          console.warn('speechSynthesis failed:', e);
         }
       }
 
-      // Strategy 3: No audio available at all — just show text (Telegram WebView fallback)
-      setTimeout(resetToListening, 3000);
+      // ─ Strategy 3: No audio — show text only ─
+      setTimeout(onDone, 3000);
+    }
+
+    // ─── SPEAK RESPONSE — single-instance enforced ───
+    // Kill any previous audio before starting next one (iOS Safari fix)
+    function killActiveAudio() {
+      if (activeAudioElement) {
+        try { activeAudioElement.pause(); activeAudioElement.src = ''; } catch(e) {}
+        activeAudioElement = null;
+      }
+      try { window.speechSynthesis?.cancel(); } catch(e) {}
+      isSpeaking = false;
     }
 
     async function sendAudioToBackend(audioBlob, twin) {
       document.getElementById('callStatus').textContent = '⏳ Thinking...';
 
-      // Debug: show blob info
-      console.log('Audio blob:', { size: audioBlob.size, type: audioBlob.type });
-
+      // Guard: if somehow called while busy, ignore
       if (!audioBlob || audioBlob.size < 100) {
         document.getElementById('callStatus').textContent = '⚠️ Mic recorded empty audio. Try again.';
         setTimeout(() => {
           document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
+          isBusy = false;
         }, 3000);
         return;
       }
@@ -1279,12 +1293,13 @@
         }
       } catch (err) {
         console.error('Voice API error:', err);
-        // Show the REAL error so we can debug
         const errMsg = err.message || 'Unknown error';
-        document.getElementById('callStatus').textContent = '⚠️ Error: ' + errMsg;
-        // Show the error as spoken text too, so user knows what happened
-        speakResponse('I had a connection issue. Let me try again when you speak.', twin);
+        document.getElementById('callStatus').textContent = '⚠️ ' + errMsg.slice(0, 60);
+        isBusy = false; // Release mutex on error
         if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+        setTimeout(() => {
+          document.getElementById('callStatus').textContent = '🎙️ Listening... speak naturally';
+        }, 3000);
       }
     }
 
@@ -1348,7 +1363,9 @@
 
     function startRecording(e) {
       e.preventDefault();
-      if (isRecording || !mediaStream) return;
+      // ─ MUTEX GUARD ─ never start a new recording if pipeline is still busy
+      if (isBusy || isRecording || !mediaStream) return;
+      isBusy = true;    // lock the pipeline
       isRecording = true;
       recordedChunks = [];
 
@@ -1381,12 +1398,19 @@
       if (!isRecording || !mediaRecorder) return;
       isRecording = false;
 
-      mediaRecorder.onstop = () => {
-        if (recordedChunks.length === 0) return;
-        const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
+      // ─ CRITICAL FIX: assign onstop ONCE before stop() to avoid stacking listeners ─
+      // Old bug: onstop was assigned in stopRecording AND could be called multiple
+      // times by the VAD, stacking multiple handlers that each sent a server request
+      const recorder = mediaRecorder; // capture reference before nulling
+      mediaRecorder = null;           // immediately null to prevent re-entry
+
+      recorder.onstop = () => {
+        if (recordedChunks.length === 0) { isBusy = false; return; }
+        const blob = new Blob(recordedChunks, { type: recorder.mimeType });
+        recordedChunks = [];
         sendAudioToBackend(blob, currentTwin);
       };
-      mediaRecorder.stop();
+      recorder.stop();
 
       if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('light');
     }
