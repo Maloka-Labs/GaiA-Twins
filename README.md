@@ -1,10 +1,25 @@
-<p align="center">
-  <img src="assets/nanoclaw-logo.png" alt="NanoClaw" width="400">
-</p>
+# 🌿 GaiA-Twins Backend (Maloka AI Twins)
 
-<p align="center">
-  An AI assistant that runs agents securely in their own containers. Lightweight, built to be easily understood and completely customized for your needs.
-</p>
+> Powered by the NanoClaw foundation, rewritten for Production by the Maloka Team.
+
+This is the central reasoning, memory, and voice tier for **Max Lowenstein** and **Melini Jesudason**'s AI Twins.
+
+## 🚀 Features
+
+- **High-Fidelity Voice Cloning:** Native integration with ElevenLabs via `voice-xtts.ts` (Dynamic WebRTC support for iOS Safari & Android).
+- **Infinite User Memory:** Longitudinal context persisted in local SQLite. Twins remember users individually.
+- **RAG Semantic Brain:** Real Gemini text-embedding-004 vectors indexed in Qdrant. Knowledge ingested dynamically from YouTube and Instagram.
+- **Cascading AI Fallbacks:** 
+  - Primary: `Groq Llama-3.3-70b` (low latency, high volume).
+  - Fallback: `Gemini-3.1-Flash` (generous quotas, multimodal audio processing).
+- **Multi-Channel Delivery:** 
+  - Telegram Mini App (WebRTC Live Voice)
+  - Telegram Bot interface
+  - REST Web APIs (`/voice`, `/chat`)
+
+## 🛠️ Architecture
+
+Users speak/type via the **tele-mini-app** frontend. This reaches the GaiA-Twins backend which processes audio via Groq Whisper (or Gemini native), retrieves contextual history (SQLite) + practitioner knowledge (Qdrant), generates a persona-accurate text response (Groq/Gemini), and clones their voice (ElevenLabs) to stream back.
 
 <p align="center">
   <a href="https://nanoclaw.dev">nanoclaw.dev</a>&nbsp; • &nbsp;
