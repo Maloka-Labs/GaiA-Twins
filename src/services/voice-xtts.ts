@@ -24,7 +24,47 @@ export async function generateEnglishVoice(twin: 'max' | 'melini', text: string)
 
   if (cleanEnglish.length === 0) return "";
 
-  // ── STRATEGY 1: Try Gradio XTTS voice cloning ──
+  // ── STRATEGY 1: ElevenLabs (High Fidelity Clone) ──
+  const elKey = process.env.ELEVENLABS_API_KEY;
+  const elVoiceId = twin === 'max' 
+    ? process.env.ELEVENLABS_MAX_VOICE_ID 
+    : process.env.ELEVENLABS_MELINI_VOICE_ID;
+
+  if (elKey && elVoiceId && !elVoiceId.startsWith('PENDING')) {
+    try {
+      logger.info({ twin, voiceId: elVoiceId }, 'Attempting ElevenLabs voice clone');
+      
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${elVoiceId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': elKey,
+        },
+        body: JSON.stringify({
+          text: cleanEnglish,
+          model_id: 'eleven_multilingual_v2',
+          voice_settings: {
+            stability: 0.75,
+            similarity_boost: 0.85,
+          },
+        }),
+      });
+
+      if (response.ok) {
+        const buffer = await response.arrayBuffer();
+        fs.writeFileSync(outputPath, Buffer.from(buffer));
+        logger.info({ twin }, 'ElevenLabs voice generated successfully');
+        return outputPath;
+      } else {
+        const errorText = await response.text();
+        logger.warn({ twin, status: response.status, errorText }, 'ElevenLabs failed, falling back');
+      }
+    } catch (err) {
+      logger.warn({ twin, err }, 'ElevenLabs error, falling back');
+    }
+  }
+
+  // ── STRATEGY 2: Try Gradio XTTS voice cloning (Legacy Fallback) ──
   // Using a community XTTS space as default if NOT provided in .env
   const xttsSpace = process.env.XTTS_GRADIO_SPACE || "coqui/xtts"; 
   

@@ -82,6 +82,15 @@ function createSchema(database: Database.Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS user_memories (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_jid    TEXT NOT NULL,
+      twin        TEXT NOT NULL,
+      role        TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+      content     TEXT NOT NULL,
+      created_at  TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_memories_chat ON user_memories (chat_jid, twin, created_at DESC);
   `);
 
   // Add context_mode column if it doesn't exist (migration for existing DBs)
@@ -604,6 +613,37 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     };
   }
   return result;
+}
+
+// --- User memory accessors ---
+
+export function storeUserMemory(
+  chatJid: string,
+  twin: string,
+  role: 'user' | 'assistant',
+  content: string,
+): void {
+  db.prepare(
+    `INSERT INTO user_memories (chat_jid, twin, role, content) VALUES (?, ?, ?, ?)`,
+  ).run(chatJid, twin, role, content);
+}
+
+export function getUserMemories(
+  chatJid: string,
+  twin: string,
+  limit = 20,
+): Array<{ role: 'user' | 'assistant'; content: string; created_at: string }> {
+  return db
+    .prepare(
+      `SELECT role, content, created_at FROM user_memories 
+       WHERE chat_jid = ? AND twin = ? 
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .all(chatJid, twin, limit) as Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    created_at: string;
+  }>;
 }
 
 // --- JSON migration ---

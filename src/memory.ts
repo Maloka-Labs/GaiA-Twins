@@ -19,7 +19,7 @@
  */
 
 import { logger } from './logger.js';
-import { readEnvFile } from './env.js';
+import { storeUserMemory, getUserMemories } from './db.js';
 
 interface MemoryTurn {
   role: 'user' | 'assistant';
@@ -27,19 +27,9 @@ interface MemoryTurn {
   created_at: string;
 }
 
-function getSupabaseConfig(): { url: string; key: string } | null {
-  const env = readEnvFile(['SUPABASE_URL', 'SUPABASE_KEY']);
-  const url = process.env.SUPABASE_URL || env.SUPABASE_URL;
-  const key = process.env.SUPABASE_KEY || env.SUPABASE_KEY;
-  if (!url || !key) {
-    logger.warn('Supabase not configured — memory disabled. Set SUPABASE_URL and SUPABASE_KEY.');
-    return null;
-  }
-  return { url, key };
-}
-
 /**
  * Saves a conversation turn (user message or assistant response) to memory.
+ * Primary: SQLite local. Fallback to Supabase if ever enabled.
  */
 export async function saveMemory(
   chatJid: string,
@@ -47,29 +37,13 @@ export async function saveMemory(
   role: 'user' | 'assistant',
   content: string,
 ): Promise<void> {
-  const config = getSupabaseConfig();
-  if (!config) return;
-
   try {
-    const response = await fetch(`${config.url}/rest/v1/user_memories`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: config.key,
-        Authorization: `Bearer ${config.key}`,
-        Prefer: 'return=minimal',
-      },
-      body: JSON.stringify({ chat_jid: chatJid, twin, role, content }),
-    });
+    // ── PRIMARY: Local SQLite ──
+    storeUserMemory(chatJid, twin, role, content);
+    logger.debug({ chatJid, twin, role }, 'Memory saved to SQLite');
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.warn({ chatJid, status: response.status, errorText }, 'Failed to save memory to Supabase');
-    } else {
-      logger.debug({ chatJid, twin, role }, 'Memory saved to Supabase');
-    }
   } catch (err) {
-    logger.warn({ err, chatJid }, 'Supabase memory save error — continuing without memory');
+    logger.warn({ err, chatJid }, 'Memory save error — continuing without memory');
   }
 }
 
@@ -78,45 +52,24 @@ export async function saveMemory(
  * Returns a formatted string ready to inject into the system prompt.
  */
 export async function loadMemory(chatJid: string, twin: string, maxTurns = 10): Promise<string> {
-  const config = getSupabaseConfig();
-  if (!config) return '';
-
   try {
-    const params = new URLSearchParams({
-      select: 'role,content,created_at',
-      chat_jid: `eq.${chatJid}`,
-      twin: `eq.${twin}`,
-      order: 'created_at.desc',
-      limit: String(maxTurns * 2), // Each turn = user + assistant
-    });
-
-    const response = await fetch(`${config.url}/rest/v1/user_memories?${params}`, {
-      headers: {
-        apikey: config.key,
-        Authorization: `Bearer ${config.key}`,
-      },
-    });
-
-    if (!response.ok) {
-      logger.warn({ chatJid, status: response.status }, 'Failed to load memory from Supabase');
-      return '';
-    }
-
-    const turns: MemoryTurn[] = (await response.json()) as MemoryTurn[];
+    // ── PRIMARY: Local SQLite ──
+    const turns: MemoryTurn[] = getUserMemories(chatJid, twin, maxTurns * 2);
+    
     if (!turns || turns.length === 0) return '';
 
-    // Reverse to chronological order
+    // Reverse to chronological order (db returns DESC)
     turns.reverse();
 
     const contextLines = turns.map(t =>
       `[${t.role === 'user' ? 'User' : 'You'}]: ${t.content}`,
     );
 
-    logger.debug({ chatJid, twin, turns: turns.length }, 'Memory loaded from Supabase');
+    logger.debug({ chatJid, twin, turns: turns.length }, 'Memory loaded from SQLite');
 
     return `\n\n## CONVERSATION MEMORY (Previous sessions with this user):\n${contextLines.join('\n')}\n\n(Use this memory to make the conversation feel continuous and personal. Reference it naturally when relevant.)\n`;
   } catch (err) {
-    logger.warn({ err, chatJid }, 'Supabase memory load error — continuing without memory');
+    logger.warn({ err, chatJid }, 'Memory load error — continuing without memory');
     return '';
   }
 }

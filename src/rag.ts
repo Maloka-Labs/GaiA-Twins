@@ -15,6 +15,7 @@
 
 import { logger } from './logger.js';
 import { readEnvFile } from './env.js';
+import { getGeminiEmbedding } from './gemini-agent.js';
 
 interface QdrantPoint {
   id: number | string;
@@ -88,12 +89,14 @@ export async function indexKnowledge(
   const name = collectionName(twin);
 
   try {
-    // Use a simple hash-based placeholder vector for Phase 1 (no GPU needed)
-    const vector = Array.from({ length: 768 }, (_, i) =>
-      Math.sin(i + text.charCodeAt(i % text.length) * 0.01) * 0.5,
-    );
+    // ── PHASE 2: REAL GEMINI EMBEDDINGS ──
+    const vector = await getGeminiEmbedding(text);
+    if (!vector) {
+      logger.warn({ twin }, 'Failed to get gemini embedding — skipping indexing');
+      return;
+    }
 
-    const pointId = Date.now();
+    const pointId = Date.now() + Math.floor(Math.random() * 1000); // Random offset for bulk indexing
     const res = await fetch(`${config.url}/collections/${name}/points`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'api-key': config.key },
@@ -103,9 +106,10 @@ export async function indexKnowledge(
     });
 
     if (res.ok) {
-      logger.info({ twin, source, length: text.length }, 'Knowledge indexed in Qdrant');
+      logger.info({ twin, source, length: text.length }, 'Knowledge indexed in Qdrant with real embeddings');
     } else {
-      logger.warn({ twin, status: res.status }, 'Qdrant index failed');
+      const errorText = await res.text();
+      logger.warn({ twin, status: res.status, errorText }, 'Qdrant index failed');
     }
   } catch (err) {
     logger.warn({ err, twin }, 'Qdrant indexKnowledge error');
@@ -123,41 +127,37 @@ export async function searchKnowledge(query: string, twin: string, maxResults = 
   const name = collectionName(twin);
 
   try {
-    // Phase 1: Scroll all points and keyword-filter in-process
-    // Phase 2: Replace with proper vector similarity search using Gemini embeddings
-    const res = await fetch(`${config.url}/collections/${name}/points/scroll`, {
+    // ── PHASE 2: VECTOR SIMILARITY SEARCH ──
+    const vector = await getGeminiEmbedding(query);
+    if (!vector) {
+       logger.warn({ twin }, 'Embedding failed for query — falling back to keyword scroll');
+       return ''; // Or handle with scroll if desired
+    }
+
+    const res = await fetch(`${config.url}/collections/${name}/points/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'api-key': config.key },
-      body: JSON.stringify({ limit: 50, with_payload: true }),
+      body: JSON.stringify({ 
+        vector, 
+        limit: maxResults, 
+        with_payload: true,
+        score_threshold: 0.5 // Threshold for relevance
+      }),
     });
 
     if (!res.ok) {
-      if (res.status === 404) return ''; // Collection doesn't exist yet — fine
-      logger.warn({ twin, status: res.status }, 'Qdrant scroll failed');
+      if (res.status === 404) return ''; 
+      logger.warn({ twin, status: res.status }, 'Qdrant vector search failed');
       return '';
     }
 
-    const data = (await res.json()) as { result?: { points?: QdrantPoint[] } };
-    const points = data.result?.points || [];
+    const data = (await res.json()) as { result?: QdrantPoint[] };
+    const points = data.result || [];
 
     if (points.length === 0) return '';
 
-    // Keyword match (case-insensitive)
-    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-    const scored = points
-      .map((p) => {
-        const textLower = (p.payload.text || '').toLowerCase();
-        const score = queryWords.filter(w => textLower.includes(w)).length;
-        return { text: p.payload.text, score };
-      })
-      .filter(p => p.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, maxResults);
-
-    if (scored.length === 0) return '';
-
-    const contextLines = scored.map(p => `- ${p.text}`).join('\n');
-    logger.debug({ twin, query, resultsFound: scored.length }, 'RAG knowledge retrieved from Qdrant');
+    const contextLines = points.map(p => `- ${p.payload.text}`).join('\n');
+    logger.debug({ twin, query, resultsFound: points.length }, 'RAG semantic knowledge retrieved from Qdrant');
 
     return `\n\n## RELEVANT KNOWLEDGE FROM YOUR PRACTICE:\n${contextLines}\n\n(Use this knowledge naturally in your response when it fits the conversation.)\n`;
   } catch (err) {

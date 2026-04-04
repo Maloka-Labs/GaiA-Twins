@@ -84,7 +84,7 @@ export async function runGeminiAgent(
     // Read API key from environment or .env file
     const envConfig = readEnvFile(['GEMINI_API_KEY', 'LLM_MODEL']);
     const apiKey = process.env.GEMINI_API_KEY || envConfig.GEMINI_API_KEY;
-    const model = process.env.LLM_MODEL || envConfig.LLM_MODEL || 'gemini-1.5-flash';
+    const model = process.env.LLM_MODEL || envConfig.LLM_MODEL || 'gemini-3.1-flash';
 
     if (!apiKey) {
         logger.error('GEMINI_API_KEY not configured');
@@ -247,5 +247,41 @@ export async function runGeminiAgent(
             result: null,
             error: `Gemini API call failed: ${err}`,
         };
+    }
+}
+/**
+ * Get vector embeddings for a piece of text using Gemini
+ */
+export async function getGeminiEmbedding(text: string): Promise<number[] | null> {
+    const envConfig = readEnvFile(['GEMINI_API_KEY']);
+    const apiKey = process.env.GEMINI_API_KEY || envConfig.GEMINI_API_KEY;
+
+    if (!apiKey) {
+        logger.error('GEMINI_API_KEY not configured for embeddings');
+        return null;
+    }
+
+    try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: 'models/text-embedding-004',
+                content: { parts: [{ text }] },
+            }),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            logger.warn({ status: response.status, error: errorText }, 'Gemini Embedding API error');
+            return null;
+        }
+
+        const data = (await response.json()) as { embedding?: { values?: number[] } };
+        return data.embedding?.values || null;
+    } catch (err) {
+        logger.error({ err }, 'Failed to call Gemini Embedding API');
+        return null;
     }
 }
